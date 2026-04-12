@@ -3,3 +3,11 @@
 !.env.example
 node_modules
 openspec
+
+# Computer Use runtime (auto-generated)
+.runtime/
+extracted-natives/
+
+# VitePress
+docs/.vitepress/dist
+docs/.vitepress/cache
