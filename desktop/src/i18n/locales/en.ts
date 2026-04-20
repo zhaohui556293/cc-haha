@@ -287,6 +287,10 @@ export const en = {
   'settings.computerUse.flagSystemKeys': 'System Key Combos',
 
   // Settings > General
+  'settings.general.appearanceTitle': 'Appearance',
+  'settings.general.appearanceDescription': 'Switch between the original light workspace and the new dark workspace.',
+  'settings.general.appearance.light': 'Light',
+  'settings.general.appearance.dark': 'Dark',
   'settings.general.languageTitle': 'Language',
   'settings.general.languageDescription': 'Choose the display language for the application.',
   'settings.general.effortTitle': 'Effort Level',

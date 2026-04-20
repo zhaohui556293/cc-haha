@@ -139,11 +139,11 @@ export function ActiveSession() {
               </>
             ) : (
               <>
-                <img src="/app-icon.jpg" alt="Claude Code Haha" className="mb-6 h-24 w-24 rounded-[22px] shadow-[0_2px_12px_rgba(0,0,0,0.06)]" />
-                <h1 className="mb-2 text-3xl font-extrabold tracking-tight text-[var(--color-text-primary)]" style={{ fontFamily: "'Manrope', sans-serif" }}>
+                <img src="/app-icon.jpg" alt="Claude Code Haha" className="mb-6 h-24 w-24 rounded-[22px]" style={{ boxShadow: 'var(--shadow-dropdown)' }} />
+                <h1 className="mb-2 text-3xl font-extrabold tracking-tight text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>
                   {t('empty.title')}
                 </h1>
-                <p className="mx-auto max-w-xs text-[var(--color-text-secondary)]" style={{ fontFamily: "'Inter', sans-serif" }}>
+                <p className="mx-auto max-w-xs text-[var(--color-text-secondary)]" style={{ fontFamily: 'var(--font-body)' }}>
                   {t('empty.subtitle')}
                 </p>
               </>

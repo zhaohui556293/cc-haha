@@ -78,4 +78,23 @@ describe('MarkdownRenderer', () => {
     )
     expect(screen.queryByTestId('mermaid-renderer')).not.toBeInTheDocument()
   })
+
+  it('wraps markdown tables for horizontal overflow handling', () => {
+    const { container } = render(
+      <MarkdownRenderer
+        content={'| Name | Value |\n| --- | --- |\n| `index.html` | Ready |'}
+      />,
+    )
+
+    expect(container.querySelector('.md-table-wrap')).toBeInTheDocument()
+    expect(screen.getByText('index.html')).toBeInTheDocument()
+  })
+
+  it('opens markdown links in a new tab safely', () => {
+    render(<MarkdownRenderer content={'[OpenAI](https://openai.com)'} />)
+
+    const link = screen.getByRole('link', { name: 'OpenAI' })
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'))
+  })
 })

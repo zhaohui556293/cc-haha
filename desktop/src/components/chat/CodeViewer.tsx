@@ -16,30 +16,30 @@ type Props = {
  */
 const warmCodeTheme = {
   name: 'warm-code',
-  type: 'light' as const,
-  fg: '#24201E',
+  type: 'dark' as const,
+  fg: 'var(--color-code-fg)',
   bg: 'transparent',
   tokenColors: [
-    { scope: ['comment', 'punctuation.definition.comment'], settings: { foreground: '#5C6B7A', fontStyle: 'italic' } },
-    { scope: ['string', 'string.quoted', 'string.template', 'string.other.link'], settings: { foreground: '#437220' } },
-    { scope: ['string.regexp'], settings: { foreground: '#C15F3C' } },
-    { scope: ['keyword', 'keyword.control', 'storage', 'storage.type', 'storage.modifier'], settings: { foreground: '#B8533B' } },
-    { scope: ['keyword.operator'], settings: { foreground: '#B8533B' } },
-    { scope: ['entity.name.function', 'support.function'], settings: { foreground: '#1D5A8C' } },
-    { scope: ['entity.name.type', 'support.type', 'support.class', 'entity.name.class', 'entity.other.inherited-class'], settings: { foreground: '#7E5520' } },
-    { scope: ['entity.name.type.parameter'], settings: { foreground: '#1B7A6A' } },
-    { scope: ['variable', 'variable.other', 'variable.other.readwrite'], settings: { foreground: '#24201E' } },
-    { scope: ['variable.parameter'], settings: { foreground: '#5C3D2E' } },
-    { scope: ['variable.other.property', 'support.type.property-name', 'meta.object-literal.key'], settings: { foreground: '#7A3E20' } },
-    { scope: ['variable.other.constant', 'variable.other.enummember'], settings: { foreground: '#7E5520' } },
-    { scope: ['constant.numeric', 'constant.language'], settings: { foreground: '#1B7A6A' } },
-    { scope: ['punctuation', 'meta.brace', 'meta.bracket'], settings: { foreground: '#5C504A' } },
-    { scope: ['entity.name.tag', 'punctuation.definition.tag'], settings: { foreground: '#B8533B' } },
-    { scope: ['entity.other.attribute-name'], settings: { foreground: '#7A3E20' } },
-    { scope: ['meta.decorator', 'punctuation.decorator'], settings: { foreground: '#7E5520' } },
-    { scope: ['markup.inserted', 'punctuation.definition.inserted'], settings: { foreground: '#1A7F37' } },
-    { scope: ['markup.deleted', 'punctuation.definition.deleted'], settings: { foreground: '#CF222E' } },
-    { scope: ['markup.heading', 'entity.name.section'], settings: { foreground: '#1D5A8C', fontStyle: 'bold' } },
+    { scope: ['comment', 'punctuation.definition.comment'], settings: { foreground: 'var(--color-code-comment)', fontStyle: 'italic' } },
+    { scope: ['string', 'string.quoted', 'string.template', 'string.other.link'], settings: { foreground: 'var(--color-code-string)' } },
+    { scope: ['string.regexp'], settings: { foreground: 'var(--color-primary-container)' } },
+    { scope: ['keyword', 'keyword.control', 'storage', 'storage.type', 'storage.modifier'], settings: { foreground: 'var(--color-code-keyword)' } },
+    { scope: ['keyword.operator'], settings: { foreground: 'var(--color-code-keyword)' } },
+    { scope: ['entity.name.function', 'support.function'], settings: { foreground: 'var(--color-code-function)' } },
+    { scope: ['entity.name.type', 'support.type', 'support.class', 'entity.name.class', 'entity.other.inherited-class'], settings: { foreground: 'var(--color-code-type)' } },
+    { scope: ['entity.name.type.parameter'], settings: { foreground: 'var(--color-code-number)' } },
+    { scope: ['variable', 'variable.other', 'variable.other.readwrite'], settings: { foreground: 'var(--color-code-fg)' } },
+    { scope: ['variable.parameter'], settings: { foreground: 'var(--color-code-parameter)' } },
+    { scope: ['variable.other.property', 'support.type.property-name', 'meta.object-literal.key'], settings: { foreground: 'var(--color-code-property)' } },
+    { scope: ['variable.other.constant', 'variable.other.enummember'], settings: { foreground: 'var(--color-code-type)' } },
+    { scope: ['constant.numeric', 'constant.language'], settings: { foreground: 'var(--color-code-number)' } },
+    { scope: ['punctuation', 'meta.brace', 'meta.bracket'], settings: { foreground: 'var(--color-code-punctuation)' } },
+    { scope: ['entity.name.tag', 'punctuation.definition.tag'], settings: { foreground: 'var(--color-code-keyword)' } },
+    { scope: ['entity.other.attribute-name'], settings: { foreground: 'var(--color-code-property)' } },
+    { scope: ['meta.decorator', 'punctuation.decorator'], settings: { foreground: 'var(--color-code-type)' } },
+    { scope: ['markup.inserted', 'punctuation.definition.inserted'], settings: { foreground: 'var(--color-code-inserted)' } },
+    { scope: ['markup.deleted', 'punctuation.definition.deleted'], settings: { foreground: 'var(--color-code-deleted)' } },
+    { scope: ['markup.heading', 'entity.name.section'], settings: { foreground: 'var(--color-code-function)', fontStyle: 'bold' } },
     { scope: ['markup.bold'], settings: { fontStyle: 'bold' } },
     { scope: ['markup.italic'], settings: { fontStyle: 'italic' } },
   ],
@@ -74,7 +74,7 @@ function CodeArea({ code, language, showLineNumbers }: { code: string; language?
   }, [code, language])
 
   return (
-    <div ref={containerRef} className="code-viewer-area max-h-[420px] overflow-auto bg-[#FDFCF9]">
+    <div ref={containerRef} className="code-viewer-area max-h-[420px] overflow-auto bg-[var(--color-code-bg)]">
       {/* Plain-text fallback shown until Shiki finishes highlighting */}
       {!loaded && (
         <pre
@@ -86,7 +86,7 @@ function CodeArea({ code, language, showLineNumbers }: { code: string; language?
             lineHeight: '1.45',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
-            color: '#24201E',
+            color: 'var(--color-code-fg)',
           }}
         >
           {code}

@@ -289,6 +289,10 @@ export const zh: Record<TranslationKey, string> = {
   'settings.computerUse.flagSystemKeys': '系统快捷键',
 
   // Settings > General
+  'settings.general.appearanceTitle': '配色主题',
+  'settings.general.appearanceDescription': '在亮色与暗色工作区之间切换，不影响原有亮色主题。',
+  'settings.general.appearance.light': '亮色',
+  'settings.general.appearance.dark': '暗色',
   'settings.general.languageTitle': '语言',
   'settings.general.languageDescription': '选择应用程序的显示语言。',
   'settings.general.effortTitle': '推理强度',

@@ -115,8 +115,8 @@ function renderPreview(
   if (toolName === 'Bash' && typeof obj.command === 'string') {
     return (
       <TerminalChrome title={typeof obj.description === 'string' ? obj.description : filePath}>
-        <div className="px-3 py-2.5 font-[var(--font-mono)] text-[11px] leading-[1.3] text-[#d8d8d8]">
-          <span className="text-[#28c840]">$</span> {obj.command}
+        <div className="px-3 py-2.5 font-[var(--font-mono)] text-[11px] leading-[1.3] text-[var(--color-terminal-fg)]">
+          <span className="text-[var(--color-terminal-accent)]">$</span> {obj.command}
         </div>
       </TerminalChrome>
     )
