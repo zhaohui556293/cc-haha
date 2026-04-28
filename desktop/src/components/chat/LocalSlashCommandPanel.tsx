@@ -375,36 +375,37 @@ function CategoryBreakdown({ categories, rawMaxTokens, t }: { categories: Contex
     <div className="rounded-md border border-[#d8b3a8] bg-[#f4f2ed] px-5 py-5 font-mono">
       <InspectorSectionTitle>{t('slash.inspector.context.categoryTitle')}</InspectorSectionTitle>
       <div className="grid gap-x-10 gap-y-5 sm:grid-cols-2">
-      {visibleCategories.map((category) => {
-        const percent = rawMaxTokens > 0 ? (category.tokens / rawMaxTokens) * 100 : 0
-        const muted = isCapacityCategory(category)
-        return (
-          <div
-            key={category.name}
-            className="min-w-0"
-          >
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className={`min-w-0 truncate text-[14px] font-semibold ${muted ? 'text-[#5f514c]' : 'text-[#1f1713]'}`}>
-                  {category.name}
-                </span>
+        {visibleCategories.map((category) => {
+          const percent = rawMaxTokens > 0 ? (category.tokens / rawMaxTokens) * 100 : 0
+          const muted = isCapacityCategory(category)
+          return (
+            <div
+              key={category.name}
+              className="min-w-0"
+            >
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className={`min-w-0 truncate text-[14px] font-semibold ${muted ? 'text-[#5f514c]' : 'text-[#1f1713]'}`}>
+                    {category.name}
+                  </span>
+                </div>
+                <div className="shrink-0 text-right leading-tight">
+                  <div className="text-sm text-[#1f1713]">{formatNumber(category.tokens)}</div>
+                  <div className="mt-0.5 text-[12px] text-[#7b665f]">{formatPercent(percent)}</div>
+                </div>
               </div>
-              <div className="shrink-0 text-right leading-tight">
-                <div className="text-sm text-[#1f1713]">{formatNumber(category.tokens)}</div>
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-[#ebe7df]">
+                <div
+                  className={muted ? 'h-full rounded-full opacity-65' : 'h-full rounded-full'}
+                  style={{
+                    width: `${Math.min(100, Math.max(0.5, percent))}%`,
+                    backgroundColor: muted ? '#9b928c' : '#8f3217',
+                  }}
+                />
               </div>
             </div>
-            <div className="mt-2 h-1 overflow-hidden rounded-full bg-[#ebe7df]">
-              <div
-                className={muted ? 'h-full rounded-full opacity-65' : 'h-full rounded-full'}
-                style={{
-                  width: `${Math.min(100, Math.max(0.5, percent))}%`,
-                  backgroundColor: muted ? '#9b928c' : '#8f3217',
-                }}
-              />
-            </div>
-          </div>
-        )
-      })}
+          )
+        })}
       </div>
     </div>
   )
@@ -459,6 +460,7 @@ function McpServerIcon({ status }: { status: string }) {
 function ContextOverview({ context, categories, t }: { context: SessionContextSnapshot; categories: ContextCategory[]; t: Translate }) {
   const usedPercent = Math.min(100, Math.max(0, context.percentage))
   const freeTokens = Math.max(0, context.rawMaxTokens - context.totalTokens)
+  const freePercent = context.rawMaxTokens > 0 ? (freeTokens / context.rawMaxTokens) * 100 : 0
   return (
     <div className="rounded-md border border-[#d8b3a8] bg-[#f4f2ed] px-5 py-6">
       <div className="mb-8 flex items-start justify-between gap-4">
@@ -476,7 +478,7 @@ function ContextOverview({ context, categories, t }: { context: SessionContextSn
       </div>
       <div className="mt-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="rounded-md border border-[#d8b3a8] bg-[#fbfaf6] px-4 py-3">
-          <ContextStatPill label={t('slash.inspector.context.free')} value={formatNumber(freeTokens)} />
+          <ContextStatPill label={t('slash.inspector.context.free')} value={formatNumber(freeTokens)} detail={formatPercent(freePercent)} />
         </div>
         <div className="rounded-md border border-[#d8b3a8] bg-[#fbfaf6] px-4 py-3">
           <ContextStatPill label={t('slash.inspector.context.messages')} value={formatNumber(context.messageBreakdown?.assistantMessageTokens ?? 0)} detail={t('slash.inspector.context.assistant')} />
