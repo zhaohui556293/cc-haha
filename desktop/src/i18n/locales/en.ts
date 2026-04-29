@@ -41,6 +41,34 @@ export const en = {
   'titlebar.terminal': 'Terminal',
   'titlebar.history': 'History',
 
+  // ─── Workspace Panel ───────────────────────────────
+  'workspace.changedFiles': 'Changed files',
+  'workspace.allFiles': 'All files',
+  'workspace.viewTabs': 'Workspace views',
+  'workspace.previewTabs': 'Preview tabs',
+  'workspace.filterPlaceholder': 'Filter files...',
+  'workspace.clearFilter': 'Clear file filter',
+  'workspace.refresh': 'Refresh workspace',
+  'workspace.closePanel': 'Close workspace panel',
+  'workspace.resizePanel': 'Resize workspace panel',
+  'workspace.closeTab': 'Close tab',
+  'workspace.preview': 'Preview',
+  'workspace.previewEmpty': 'Select a file to preview.',
+  'workspace.notGitRepo': 'Not a git repository.',
+  'workspace.missingWorkdir': 'Working directory is missing.',
+  'workspace.loadError': 'Failed to load workspace data.',
+  'workspace.noChanges': 'No changes',
+  'workspace.noFiles': 'No files',
+  'workspace.noMatchingFiles': 'No matching files',
+  'workspace.previewKind.diff': 'Diff',
+  'workspace.previewKind.file': 'File',
+  'workspace.previewState.loading': 'Loading preview...',
+  'workspace.previewState.binary': 'Binary file preview is unavailable.',
+  'workspace.previewState.tooLarge': 'File is too large to preview.',
+  'workspace.previewState.missing': 'File not found.',
+  'workspace.imagePreviewUnavailable': 'Image preview is unavailable.',
+  'workspace.previewLineLimit': 'Showing first {count} lines. Open in your editor for the full file.',
+
   // ─── Status Bar ──────────────────────────────────────
   'status.connected': 'Connected',
   'status.connecting': 'Connecting...',
@@ -962,6 +990,9 @@ export const en = {
   'tabs.closeConfirmMessage': 'This session is still running. What would you like to do?',
   'tabs.closeConfirmKeep': 'Keep Running',
   'tabs.closeConfirmStop': 'Stop & Close',
+  'tabs.openTerminal': 'Open Terminal',
+  'tabs.showWorkspace': 'Show Workspace',
+  'tabs.hideWorkspace': 'Hide Workspace',
 } as const
 
 export type TranslationKey = keyof typeof en

@@ -36,9 +36,10 @@ type Attachment = {
 
 type ChatInputProps = {
   variant?: 'default' | 'hero'
+  compact?: boolean
 }
 
-export function ChatInput({ variant = 'default' }: ChatInputProps) {
+export function ChatInput({ variant = 'default', compact = false }: ChatInputProps) {
   const t = useTranslation()
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -72,7 +73,7 @@ export function ChatInput({ variant = 'default' }: ChatInputProps) {
   const isActive = chatState !== 'idle'
   const isWorkspaceMissing = activeSession?.workDirExists === false
   const canSubmit = !isWorkspaceMissing && (input.trim().length > 0 || (!isMemberSession && attachments.length > 0))
-  const isHeroComposer = variant === 'hero' && !isMemberSession
+  const isHeroComposer = variant === 'hero' && !isMemberSession && !compact
   const resolvedWorkDir = activeSession?.workDir || gitInfo?.workDir || undefined
 
   useEffect(() => {
@@ -517,12 +518,30 @@ export function ChatInput({ variant = 'default' }: ChatInputProps) {
   const slashCommandsLabel = isHeroComposer ? t('empty.slashCommands') : t('chat.slashCommands')
 
   return (
-    <div className={isHeroComposer ? 'bg-[var(--color-surface)] px-8 pb-4' : 'bg-[var(--color-surface)] px-4 py-4'}>
-      <div className={isHeroComposer ? 'mx-auto flex w-full max-w-3xl flex-col gap-2' : 'mx-auto max-w-[860px]'}>
+    <div
+      className={
+        isHeroComposer
+          ? 'bg-[var(--color-surface)] px-8 pb-4'
+          : compact
+            ? 'border-t border-[var(--color-border)]/70 bg-[var(--color-surface)] px-3 py-3'
+            : 'bg-[var(--color-surface)] px-4 py-4'
+      }
+    >
+      <div
+        className={
+          isHeroComposer
+            ? 'mx-auto flex w-full max-w-3xl flex-col gap-2'
+            : compact
+              ? 'mx-auto max-w-full'
+              : 'mx-auto max-w-[860px]'
+        }
+      >
         <div
           className={isHeroComposer
             ? 'glass-panel relative flex flex-col gap-3 rounded-xl p-4 transition-colors'
-            : 'glass-panel relative rounded-xl p-4 transition-colors'}
+            : compact
+              ? 'glass-panel relative rounded-xl p-3 transition-colors'
+              : 'glass-panel relative rounded-xl p-4 transition-colors'}
           onDragOver={(event) => event.preventDefault()}
           onDrop={handleDrop}
         >
@@ -637,14 +656,18 @@ export function ChatInput({ variant = 'default' }: ChatInputProps) {
               placeholder={composerPlaceholder}
               disabled={isWorkspaceMissing}
               rows={1}
-              className="w-full resize-none bg-transparent py-2 pb-12 text-sm leading-relaxed text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:opacity-50"
+              className={`w-full resize-none bg-transparent text-sm leading-relaxed text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:opacity-50 ${
+                compact ? 'py-1.5 pb-11' : 'py-2 pb-12'
+              }`}
             />
           )}
 
           <div className={isHeroComposer
             ? 'flex items-center justify-between border-t border-[var(--color-border-separator)] pt-3'
-            : 'absolute bottom-0 left-0 right-0 flex items-center justify-between border-t border-[var(--color-border-separator)] px-3 py-3'}>
-            <div className="flex items-center gap-2">
+            : `absolute bottom-0 left-0 right-0 flex items-center justify-between border-t border-[var(--color-border-separator)] ${
+              compact ? 'gap-2 px-2.5 py-2' : 'px-3 py-3'
+            }`}>
+            <div className="flex min-w-0 items-center gap-2">
               {!isMemberSession && (
                 <>
                   <div ref={plusMenuRef} className="relative">
@@ -679,20 +702,30 @@ export function ChatInput({ variant = 'default' }: ChatInputProps) {
                     )}
                   </div>
 
-                  <PermissionModeSelector />
+                  <PermissionModeSelector compact={compact} />
                 </>
               )}
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               {!isMemberSession && activeTabId && (
-                <ModelSelector runtimeKey={activeTabId} disabled={isActive} />
+                <ModelSelector runtimeKey={activeTabId} disabled={isActive} compact={compact} />
               )}
               <button
                 onClick={!isMemberSession && isActive ? () => stopGeneration(activeTabId!) : handleSubmit}
                 disabled={!isMemberSession && isActive ? false : !canSubmit}
-                title={!isMemberSession && isActive ? t('chat.stopTitle') : undefined}
-                className={`flex w-[112px] items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all hover:brightness-105 disabled:opacity-30 ${
+                title={
+                  !isMemberSession && isActive
+                    ? t('chat.stopTitle')
+                    : compact
+                      ? isMemberSession
+                        ? t('common.send')
+                        : t('common.run')
+                      : undefined
+                }
+                className={`flex items-center justify-center gap-1 rounded-lg text-xs font-semibold transition-all hover:brightness-105 disabled:opacity-30 ${
+                  compact ? 'h-8 w-8 px-0 py-0' : 'w-[112px] px-3 py-1.5'
+                } ${
                   !isMemberSession && isActive
                     ? 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
                     : 'bg-[image:var(--gradient-btn-primary)] text-[var(--color-btn-primary-fg)] shadow-[var(--shadow-button-primary)]'
@@ -701,7 +734,7 @@ export function ChatInput({ variant = 'default' }: ChatInputProps) {
                 <span className="material-symbols-outlined text-[14px]">
                   {!isMemberSession && isActive ? 'stop' : 'arrow_forward'}
                 </span>
-                {!isMemberSession && isActive ? t('common.stop') : isMemberSession ? t('common.send') : t('common.run')}
+                {!compact && (!isMemberSession && isActive ? t('common.stop') : isMemberSession ? t('common.send') : t('common.run'))}
               </button>
             </div>
           </div>
@@ -710,12 +743,13 @@ export function ChatInput({ variant = 'default' }: ChatInputProps) {
         <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
 
         {!isMemberSession && (
-          <div className="mt-3 px-1">
+          <div className={compact ? 'mt-2 flex min-w-0 justify-center px-1' : 'mt-3 px-1'}>
             {hasMessages ? (
               <ProjectContextChip
                 workDir={resolvedWorkDir}
                 repoName={gitInfo?.repoName || null}
                 branch={gitInfo?.branch || null}
+                compact={compact}
               />
             ) : (
               <DirectoryPicker

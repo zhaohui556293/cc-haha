@@ -18,11 +18,17 @@ import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { getSlashCommands } from '../ws/handler.js'
 import { getCommandName } from '../../commands.js'
 import { getSkillDirCommands } from '../../skills/loadSkillsDir.js'
+import { WorkspaceService } from '../services/workspaceService.js'
 import {
   executeSessionRewind,
   previewSessionRewind,
   type RewindTargetSelector,
 } from '../services/sessionRewindService.js'
+
+const workspaceService = new WorkspaceService(async (sessionId) => (
+  conversationService.getSessionWorkDir(sessionId) ||
+  await sessionService.getSessionWorkDir(sessionId)
+), async (sessionId) => sessionService.getSessionMessages(sessionId))
 
 export async function handleSessionsApi(
   req: Request,
@@ -109,6 +115,16 @@ export async function handleSessionsApi(
       return await getSessionInspection(sessionId, url)
     }
 
+    if (subResource === 'workspace') {
+      if (req.method !== 'GET') {
+        return Response.json(
+          { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+          { status: 405 }
+        )
+      }
+      return await handleSessionWorkspaceRoute(sessionId, url, segments[4])
+    }
+
     // Route to conversations handler if sub-resource is 'chat'
     if (subResource === 'chat') {
       // This is handled by the conversations API, but in case the router
@@ -174,6 +190,36 @@ async function getSessionMessages(sessionId: string): Promise<Response> {
   return Response.json({ messages })
 }
 
+async function handleSessionWorkspaceRoute(
+  sessionId: string,
+  url: URL,
+  workspaceResource?: string,
+): Promise<Response> {
+  await requireSessionWorkspace(sessionId)
+
+  switch (workspaceResource) {
+    case 'status':
+      return Response.json(await workspaceService.getStatus(sessionId))
+    case 'tree':
+      return await runWorkspaceRequest(() => workspaceService.readTree(
+        sessionId,
+        url.searchParams.get('path') || '',
+      ))
+    case 'file':
+      return await runWorkspaceRequest(() => workspaceService.readFile(
+        sessionId,
+        requireWorkspacePath(url, 'file'),
+      ))
+    case 'diff':
+      return await runWorkspaceDiffRequest(() => workspaceService.getDiff(
+        sessionId,
+        requireWorkspacePath(url, 'diff'),
+      ))
+    default:
+      throw ApiError.notFound(`Unknown workspace resource: ${workspaceResource || 'workspace'}`)
+  }
+}
+
 async function createSession(req: Request): Promise<Response> {
   let body: { workDir?: string }
   try {
@@ -188,6 +234,61 @@ async function createSession(req: Request): Promise<Response> {
 
   const result = await sessionService.createSession(body.workDir)
   return Response.json(result, { status: 201 })
+}
+
+async function requireSessionWorkspace(sessionId: string): Promise<string> {
+  const workDir =
+    conversationService.getSessionWorkDir(sessionId) ||
+    await sessionService.getSessionWorkDir(sessionId)
+
+  if (!workDir) {
+    throw ApiError.notFound(`Session not found: ${sessionId}`)
+  }
+
+  return workDir
+}
+
+function requireWorkspacePath(url: URL, route: 'file' | 'diff'): string {
+  const filePath = url.searchParams.get('path')
+  if (!filePath) {
+    throw ApiError.badRequest(`path query parameter is required for workspace ${route}`)
+  }
+  return filePath
+}
+
+async function runWorkspaceRequest<T>(operation: () => Promise<T>): Promise<Response> {
+  try {
+    return Response.json(await operation())
+  } catch (error) {
+    if (isOutsideWorkspaceError(error)) {
+      throw new ApiError(403, error.message, 'FORBIDDEN')
+    }
+    if (isSessionNotFoundError(error)) {
+      throw ApiError.notFound(error.message)
+    }
+    throw error
+  }
+}
+
+async function runWorkspaceDiffRequest<T extends { state?: string; error?: string }>(
+  operation: () => Promise<T>,
+): Promise<Response> {
+  const result = await runWorkspaceRequest(operation)
+  const body = await result.clone().json() as T
+
+  if (body.state === 'error' && typeof body.error === 'string' && body.error.includes('outside workspace')) {
+    throw new ApiError(403, body.error, 'FORBIDDEN')
+  }
+
+  return result
+}
+
+function isOutsideWorkspaceError(error: unknown): error is Error {
+  return error instanceof Error && error.message.includes('outside workspace')
+}
+
+function isSessionNotFoundError(error: unknown): error is Error {
+  return error instanceof Error && error.message.startsWith('Session not found:')
 }
 
 async function deleteSession(sessionId: string): Promise<Response> {

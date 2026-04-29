@@ -1,6 +1,7 @@
 import { forwardRef, useRef, useState, useEffect, useCallback } from 'react'
 import { useTabStore, type Tab } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
+import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
 import { useTranslation } from '../../i18n'
 import { WindowControls, showWindowControls } from './WindowControls'
 
@@ -14,6 +15,11 @@ export function TabBar() {
   const setActiveTab = useTabStore((s) => s.setActiveTab)
   const closeTab = useTabStore((s) => s.closeTab)
   const disconnectSession = useChatStore((s) => s.disconnectSession)
+  const activeTab = tabs.find((tab) => tab.sessionId === activeTabId) ?? null
+  const isActiveSessionTab = activeTab?.type === 'session'
+  const isWorkspacePanelOpen = useWorkspacePanelStore((state) =>
+    activeTabId && isActiveSessionTab ? state.isPanelOpen(activeTabId) : false,
+  )
 
   const moveTab = useTabStore((s) => s.moveTab)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -74,12 +80,19 @@ export function TabBar() {
     el.scrollBy({ left: direction === 'left' ? -TAB_WIDTH : TAB_WIDTH, behavior: 'smooth' })
   }
 
+  const closeTabWithCleanup = useCallback((tab: Tab) => {
+    if (tab.type === 'session') {
+      useWorkspacePanelStore.getState().clearSession(tab.sessionId)
+    }
+    closeTab(tab.sessionId)
+  }, [closeTab])
+
   const handleClose = (sessionId: string) => {
     // Special tabs can always be closed directly
     const tab = tabs.find((t) => t.sessionId === sessionId)
     if (!tab) return
     if (tab.type !== 'session') {
-      closeTab(sessionId)
+      closeTabWithCleanup(tab)
       return
     }
 
@@ -92,7 +105,7 @@ export function TabBar() {
     }
 
     disconnectSession(sessionId)
-    closeTab(sessionId)
+    closeTabWithCleanup(tab)
   }
 
   const handleContextMenu = (e: React.MouseEvent, sessionId: string) => {
@@ -105,7 +118,7 @@ export function TabBar() {
     const otherTabs = tabs.filter((t) => t.sessionId !== sessionId)
     for (const tab of otherTabs) {
       if (tab.type === 'session') disconnectSession(tab.sessionId)
-      closeTab(tab.sessionId)
+      closeTabWithCleanup(tab)
     }
   }
 
@@ -115,7 +128,7 @@ export function TabBar() {
     const leftTabs = tabs.slice(0, idx)
     for (const tab of leftTabs) {
       if (tab.type === 'session') disconnectSession(tab.sessionId)
-      closeTab(tab.sessionId)
+      closeTabWithCleanup(tab)
     }
   }
 
@@ -125,7 +138,7 @@ export function TabBar() {
     const rightTabs = tabs.slice(idx + 1)
     for (const tab of rightTabs) {
       if (tab.type === 'session') disconnectSession(tab.sessionId)
-      closeTab(tab.sessionId)
+      closeTabWithCleanup(tab)
     }
   }
 
@@ -133,7 +146,7 @@ export function TabBar() {
     setContextMenu(null)
     for (const tab of tabs) {
       if (tab.type === 'session') disconnectSession(tab.sessionId)
-      closeTab(tab.sessionId)
+      closeTabWithCleanup(tab)
     }
   }
 
@@ -265,6 +278,21 @@ export function TabBar() {
         ))}
       </div>
 
+      <div className="flex shrink-0 items-center gap-0.5 px-1.5">
+        <ToolbarIconButton
+          icon="terminal"
+          label={t('tabs.openTerminal')}
+          onClick={() => useTabStore.getState().openTerminalTab()}
+        />
+        {isActiveSessionTab && activeTabId && (
+          <ToolbarIconButton
+            icon={isWorkspacePanelOpen ? 'folder_open' : 'folder'}
+            label={t(isWorkspacePanelOpen ? 'tabs.hideWorkspace' : 'tabs.showWorkspace')}
+            onClick={() => useWorkspacePanelStore.getState().togglePanel(activeTabId)}
+          />
+        )}
+      </div>
+
       {isTauri && (
         <div
           data-testid="tab-bar-drag-gutter"
@@ -331,7 +359,11 @@ export function TabBar() {
                 {t('common.cancel')}
               </button>
               <button
-                onClick={() => { closeTab(closingTabId); setClosingTabId(null) }}
+                onClick={() => {
+                  const tab = tabs.find((item) => item.sessionId === closingTabId)
+                  if (tab) closeTabWithCleanup(tab)
+                  setClosingTabId(null)
+                }}
                 className="px-3 py-1.5 text-xs rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]"
               >
                 {t('tabs.closeConfirmKeep')}
@@ -340,7 +372,8 @@ export function TabBar() {
                 onClick={() => {
                   useChatStore.getState().stopGeneration(closingTabId)
                   disconnectSession(closingTabId)
-                  closeTab(closingTabId)
+                  const tab = tabs.find((item) => item.sessionId === closingTabId)
+                  if (tab) closeTabWithCleanup(tab)
                   setClosingTabId(null)
                 }}
                 className="px-3 py-1.5 text-xs rounded-lg bg-[var(--color-brand)] text-white hover:opacity-90"
@@ -423,3 +456,25 @@ const TabItem = forwardRef<HTMLDivElement, {
   )
 })
 TabItem.displayName = 'TabItem'
+
+function ToolbarIconButton({
+  icon,
+  label,
+  onClick,
+}: {
+  icon: string
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+    >
+      <span className="material-symbols-outlined text-[16px]">{icon}</span>
+    </button>
+  )
+}

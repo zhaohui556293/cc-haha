@@ -139,6 +139,80 @@ export type SessionInspectionResponse = {
   errors?: Record<string, string>
 }
 
+export type WorkspaceFileStatus =
+  | 'modified'
+  | 'added'
+  | 'deleted'
+  | 'renamed'
+  | 'untracked'
+  | 'copied'
+  | 'type_changed'
+  | 'unknown'
+
+export type WorkspaceChangedFile = {
+  path: string
+  oldPath?: string
+  status: WorkspaceFileStatus
+  additions: number
+  deletions: number
+}
+
+export type WorkspaceStatusResult = {
+  state: 'ok' | 'not_git_repo' | 'missing_workdir' | 'error'
+  workDir: string
+  repoName: string | null
+  branch: string | null
+  isGitRepo: boolean
+  changedFiles: WorkspaceChangedFile[]
+  error?: string
+}
+
+export type WorkspaceReadFileResult = {
+  state: 'ok' | 'binary' | 'too_large' | 'missing' | 'error'
+  path: string
+  previewType?: 'text' | 'image'
+  content?: string
+  dataUrl?: string
+  mimeType?: string
+  language: string
+  size: number
+  error?: string
+}
+
+export type WorkspaceTreeEntry = {
+  name: string
+  path: string
+  isDirectory: boolean
+}
+
+export type WorkspaceTreeResult = {
+  state: 'ok' | 'missing' | 'error'
+  path: string
+  entries: WorkspaceTreeEntry[]
+  error?: string
+}
+
+export type WorkspaceDiffResult = {
+  state: 'ok' | 'missing' | 'not_git_repo' | 'error'
+  path: string
+  diff?: string
+  error?: string
+}
+
+function buildWorkspacePath(
+  sessionId: string,
+  resource: 'status' | 'tree' | 'file' | 'diff',
+  workspacePath?: string,
+) {
+  const query = new URLSearchParams()
+  if (typeof workspacePath === 'string' && workspacePath.length > 0) {
+    query.set('path', workspacePath)
+  }
+
+  const qs = query.toString()
+  return `/api/sessions/${sessionId}/workspace/${resource}${qs ? `?${qs}` : ''}`
+}
+
 export const sessionsApi = {
   list(params?: { project?: string; limit?: number; offset?: number }) {
     const query = new URLSearchParams()
@@ -185,6 +259,22 @@ export const sessionsApi = {
     return api.get<SessionInspectionResponse>(`/api/sessions/${sessionId}/inspection${query}`, {
       timeout: options?.timeout ?? (options?.includeContext ? 45_000 : 25_000),
     })
+  },
+
+  getWorkspaceStatus(sessionId: string) {
+    return api.get<WorkspaceStatusResult>(buildWorkspacePath(sessionId, 'status'))
+  },
+
+  getWorkspaceTree(sessionId: string, workspacePath = '') {
+    return api.get<WorkspaceTreeResult>(buildWorkspacePath(sessionId, 'tree', workspacePath))
+  },
+
+  getWorkspaceFile(sessionId: string, workspacePath: string) {
+    return api.get<WorkspaceReadFileResult>(buildWorkspacePath(sessionId, 'file', workspacePath))
+  },
+
+  getWorkspaceDiff(sessionId: string, workspacePath: string) {
+    return api.get<WorkspaceDiffResult>(buildWorkspacePath(sessionId, 'diff', workspacePath))
   },
 
   rewind(sessionId: string, body: {
