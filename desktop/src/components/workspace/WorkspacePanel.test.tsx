@@ -273,6 +273,66 @@ describe('WorkspacePanel', () => {
     })
   })
 
+  it('opens to all files when the current turn has no changed files', async () => {
+    const statusRequest = deferred<{
+      state: 'ok'
+      workDir: string
+      repoName: string
+      branch: string
+      isGitRepo: true
+      changedFiles: []
+    }>()
+    const rootTreeRequest = deferred<{
+      state: 'ok'
+      path: ''
+      entries: Array<{ name: string; path: string; isDirectory: boolean }>
+    }>()
+
+    getMocks().getWorkspaceStatusMock.mockReturnValue(statusRequest.promise)
+    getMocks().getWorkspaceTreeMock.mockReturnValue(rootTreeRequest.promise)
+
+    await act(() => {
+      useWorkspacePanelStore.getState().openPanel('session-empty-tree')
+    })
+
+    const view = await renderPanel('session-empty-tree')
+    expect(view.getByRole('button', { name: 'Changed files' })).toBeTruthy()
+
+    await act(async () => {
+      statusRequest.resolve({
+        state: 'ok',
+        workDir: '/repo',
+        repoName: 'repo',
+        branch: 'main',
+        isGitRepo: true,
+        changedFiles: [],
+      })
+      await statusRequest.promise
+    })
+
+    await waitFor(() => {
+      expect(useWorkspacePanelStore.getState().getActiveView('session-empty-tree')).toBe('all')
+      expect(getMocks().getWorkspaceTreeMock).toHaveBeenCalledWith('session-empty-tree', '')
+    })
+
+    await act(async () => {
+      rootTreeRequest.resolve({
+        state: 'ok',
+        path: '',
+        entries: [
+          { name: 'src', path: 'src', isDirectory: true },
+          { name: 'README.md', path: 'README.md', isDirectory: false },
+        ],
+      })
+      await rootTreeRequest.promise
+    })
+
+    expect(view.getByRole('button', { name: 'All files' })).toBeTruthy()
+    expect(await view.findByText('src')).toBeTruthy()
+    expect(await view.findByText('README.md')).toBeTruthy()
+    expect(view.queryByText('No changes')).toBeNull()
+  })
+
   it('lazy loads the root tree, expands directories, and opens file previews from the all-files view', async () => {
     const statusRequest = deferred<{
       state: 'ok'
@@ -759,6 +819,43 @@ describe('WorkspacePanel', () => {
     const view = await renderPanel('session-zh')
 
     expect(view.getByRole('button', { name: '已更改文件' })).toBeTruthy()
+  })
+
+  it('keeps the workspace header controls compact', async () => {
+    await setWorkspaceState((state) => ({
+      ...state,
+      panelBySession: {
+        ...state.panelBySession,
+        'session-compact-header': {
+          isOpen: true,
+          activeView: 'changed',
+        },
+      },
+      statusBySession: {
+        ...state.statusBySession,
+        'session-compact-header': {
+          state: 'ok',
+          workDir: '/repo',
+          repoName: 'repo',
+          branch: 'main',
+          isGitRepo: true,
+          changedFiles: [],
+        },
+      },
+    }))
+
+    const view = await renderPanel('session-compact-header')
+    const viewMenuButton = view.getByRole('button', { name: 'Changed files' })
+    const refreshButton = view.getByRole('button', { name: 'Refresh workspace' })
+    const closeButton = view.getByRole('button', { name: 'Close workspace panel' })
+
+    expect(viewMenuButton.className).toContain('text-[14px]')
+    expect(viewMenuButton.className).not.toContain('text-[18px]')
+    expect(viewMenuButton.querySelector('.material-symbols-outlined')?.className).toContain('text-[15px]')
+    expect(refreshButton.className).toContain('h-7 w-7')
+    expect(closeButton.className).toContain('h-7 w-7')
+    expect(refreshButton.querySelector('.material-symbols-outlined')?.className).toContain('text-[16px]')
+    expect(closeButton.querySelector('.material-symbols-outlined')?.className).toContain('text-[16px]')
   })
 
   it('shows explicit empty and error states in the changed view', async () => {

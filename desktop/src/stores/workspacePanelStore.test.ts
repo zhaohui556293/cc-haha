@@ -120,6 +120,65 @@ describe('workspacePanelStore', () => {
     expect(useWorkspacePanelStore.getState().errors.statusBySession['session-1']).toBeNull()
   })
 
+  it('defaults an empty changed-files status to the all-files view', async () => {
+    mocks.getWorkspaceStatusMock.mockResolvedValue({
+      state: 'ok',
+      workDir: '/repo',
+      repoName: 'repo',
+      branch: 'main',
+      isGitRepo: true,
+      changedFiles: [],
+    })
+
+    useWorkspacePanelStore.getState().openPanel('session-empty-changes')
+    expect(useWorkspacePanelStore.getState().getActiveView('session-empty-changes')).toBe('changed')
+
+    await useWorkspacePanelStore.getState().loadStatus('session-empty-changes')
+
+    expect(useWorkspacePanelStore.getState().statusBySession['session-empty-changes']?.changedFiles).toEqual([])
+    expect(useWorkspacePanelStore.getState().getActiveView('session-empty-changes')).toBe('all')
+  })
+
+  it('keeps the changed-files view when status contains changes', async () => {
+    mocks.getWorkspaceStatusMock.mockResolvedValue({
+      state: 'ok',
+      workDir: '/repo',
+      repoName: 'repo',
+      branch: 'main',
+      isGitRepo: true,
+      changedFiles: [
+        {
+          path: 'src/app.ts',
+          status: 'modified',
+          additions: 2,
+          deletions: 1,
+        },
+      ],
+    })
+
+    useWorkspacePanelStore.getState().openPanel('session-has-changes')
+    await useWorkspacePanelStore.getState().loadStatus('session-has-changes')
+
+    expect(useWorkspacePanelStore.getState().getActiveView('session-has-changes')).toBe('changed')
+  })
+
+  it('does not override an explicit changed-files selection when status is empty', async () => {
+    mocks.getWorkspaceStatusMock.mockResolvedValue({
+      state: 'ok',
+      workDir: '/repo',
+      repoName: 'repo',
+      branch: 'main',
+      isGitRepo: true,
+      changedFiles: [],
+    })
+
+    useWorkspacePanelStore.getState().openPanel('session-explicit-changed')
+    useWorkspacePanelStore.getState().setActiveView('session-explicit-changed', 'changed')
+    await useWorkspacePanelStore.getState().loadStatus('session-explicit-changed')
+
+    expect(useWorkspacePanelStore.getState().getActiveView('session-explicit-changed')).toBe('changed')
+  })
+
   it('captures workspace status request errors', async () => {
     mocks.getWorkspaceStatusMock.mockRejectedValue(new Error('status failed'))
 

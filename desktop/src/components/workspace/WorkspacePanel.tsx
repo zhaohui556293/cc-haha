@@ -242,9 +242,9 @@ function ToolbarIconButton({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-[9px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]/35"
+      className="inline-flex h-7 w-7 items-center justify-center rounded-[7px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]/35"
     >
-      <span className="material-symbols-outlined text-[18px]">{icon}</span>
+      <span className="material-symbols-outlined text-[16px]">{icon}</span>
     </button>
   )
 }
@@ -937,7 +937,7 @@ export function WorkspacePanel({ sessionId }: WorkspacePanelProps) {
       <div
         className={`${hasPreviewTabs ? 'basis-[32%] min-w-[220px] max-w-[320px]' : 'w-full'} flex h-full shrink-0 flex-col bg-[var(--color-surface)]`}
       >
-        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3">
+        <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-[var(--color-border)] px-2.5">
           <div className="relative min-w-0">
             <button
               type="button"
@@ -945,17 +945,17 @@ export function WorkspacePanel({ sessionId }: WorkspacePanelProps) {
               aria-haspopup="menu"
               aria-expanded={isViewMenuOpen}
               onClick={() => setIsViewMenuOpen((open) => !open)}
-              className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-[8px] px-2.5 py-1.5 text-[18px] font-semibold leading-none text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]/35"
+              className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-[7px] px-2 py-1 text-[14px] font-semibold leading-5 text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]/35"
             >
               <span className="truncate">
                 {activeView === 'changed' ? t('workspace.changedFiles') : t('workspace.allFiles')}
               </span>
-              <span className="material-symbols-outlined shrink-0 text-[18px] font-normal text-[var(--color-text-tertiary)]">expand_more</span>
+              <span className="material-symbols-outlined shrink-0 text-[15px] font-normal text-[var(--color-text-tertiary)]">expand_more</span>
             </button>
             {isViewMenuOpen && (
               <div
                 role="menu"
-                className="absolute left-0 top-[calc(100%+6px)] z-30 min-w-[132px] overflow-hidden rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-1 shadow-[var(--shadow-dropdown)]"
+                className="absolute left-0 top-[calc(100%+4px)] z-30 min-w-[124px] overflow-hidden rounded-[9px] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-1 shadow-[var(--shadow-dropdown)]"
               >
                 {(['changed', 'all'] as const).map((view) => {
                   const selected = activeView === view
@@ -965,7 +965,7 @@ export function WorkspacePanel({ sessionId }: WorkspacePanelProps) {
                       type="button"
                       role="menuitem"
                       onClick={() => handleSetActiveView(view)}
-                      className={`flex h-8 w-full items-center gap-2 px-3 text-left text-[13px] transition-colors ${
+                      className={`flex h-7 w-full items-center gap-2 px-2.5 text-left text-[12px] transition-colors ${
                         selected ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
                       }`}
                     >
@@ -973,7 +973,7 @@ export function WorkspacePanel({ sessionId }: WorkspacePanelProps) {
                         {view === 'changed' ? t('workspace.changedFiles') : t('workspace.allFiles')}
                       </span>
                       {selected && (
-                        <span className="material-symbols-outlined text-[15px] text-[var(--color-brand)]">check</span>
+                        <span className="material-symbols-outlined text-[14px] text-[var(--color-brand)]">check</span>
                       )}
                     </button>
                   )

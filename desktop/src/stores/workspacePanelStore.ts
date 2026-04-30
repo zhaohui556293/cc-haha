@@ -38,6 +38,7 @@ export type WorkspacePreviewTab = {
 export type WorkspacePanelSessionState = {
   isOpen: boolean
   activeView: WorkspacePanelView
+  hasUserSelectedView?: boolean
 }
 
 type WorkspacePanelLoadingState = {
@@ -246,6 +247,7 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
         [sessionId]: {
           ...getSessionPanelState(state.panelBySession, sessionId),
           activeView: view,
+          hasUserSelectedView: true,
         },
       },
     })),
@@ -274,26 +276,42 @@ export const useWorkspacePanelStore = create<WorkspacePanelStore>((set, get) => 
       const result = await sessionsApi.getWorkspaceStatus(sessionId)
       if (!isLatestRequest(statusRequestIds, sessionId, requestId)) return
 
-      set((state) => ({
-        statusBySession: {
-          ...state.statusBySession,
-          [sessionId]: result,
-        },
-        loading: {
-          ...state.loading,
-          statusBySession: {
-            ...state.loading.statusBySession,
-            [sessionId]: false,
+      set((state) => {
+        const panel = getSessionPanelState(state.panelBySession, sessionId)
+        const shouldDefaultToAllFiles =
+          !panel.hasUserSelectedView
+          && panel.activeView === 'changed'
+          && result.state === 'ok'
+          && result.changedFiles.length === 0
+
+        return {
+          panelBySession: {
+            ...state.panelBySession,
+            [sessionId]: {
+              ...panel,
+              activeView: shouldDefaultToAllFiles ? 'all' : panel.activeView,
+            },
           },
-        },
-        errors: {
-          ...state.errors,
           statusBySession: {
-            ...state.errors.statusBySession,
-            [sessionId]: result.error ?? null,
+            ...state.statusBySession,
+            [sessionId]: result,
           },
-        },
-      }))
+          loading: {
+            ...state.loading,
+            statusBySession: {
+              ...state.loading.statusBySession,
+              [sessionId]: false,
+            },
+          },
+          errors: {
+            ...state.errors,
+            statusBySession: {
+              ...state.errors.statusBySession,
+              [sessionId]: result.error ?? null,
+            },
+          },
+        }
+      })
     } catch (error) {
       if (!isLatestRequest(statusRequestIds, sessionId, requestId)) return
 
