@@ -299,9 +299,17 @@ export const sessionsApi = {
     return api.get<SessionTurnCheckpointsResponse>(`/api/sessions/${sessionId}/turn-checkpoints`)
   },
 
-  getTurnCheckpointDiff(sessionId: string, targetUserMessageId: string, workspacePath: string) {
+  getTurnCheckpointDiff(
+    sessionId: string,
+    targetUserMessageId: string,
+    workspacePath: string,
+    userMessageIndex?: number,
+  ) {
     const query = new URLSearchParams()
     query.set('targetUserMessageId', targetUserMessageId)
+    if (Number.isInteger(userMessageIndex)) {
+      query.set('userMessageIndex', String(userMessageIndex))
+    }
     query.set('path', workspacePath)
     return api.get<TurnCheckpointDiffResult>(
       `/api/sessions/${sessionId}/turn-checkpoints/diff?${query.toString()}`,

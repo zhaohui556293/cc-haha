@@ -338,10 +338,15 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
         const targetByMessageId = new Map(
           completedTurnTargets.map((target) => [target.messageId, target] as const),
         )
+        const targetByUserMessageIndex = new Map(
+          completedTurnTargets.map((target) => [target.userMessageIndex, target] as const),
+        )
 
         setTurnChangeCards(
           normalizeTurnCheckpoints(checkpointResponse).flatMap((checkpoint) => {
-            const target = targetByMessageId.get(checkpoint.target.targetUserMessageId)
+            const target =
+              targetByMessageId.get(checkpoint.target.targetUserMessageId) ??
+              targetByUserMessageIndex.get(checkpoint.target.userMessageIndex)
             if (!target || !checkpoint.code.available || checkpoint.code.filesChanged.length === 0) {
               return []
             }
@@ -475,7 +480,7 @@ export function MessageList({ sessionId, compact = false }: MessageListProps = {
                 <CurrentTurnChangeCard
                   key={`turn-change-${card.target.messageId}`}
                   sessionId={resolvedSessionId}
-                  targetUserMessageId={card.target.messageId}
+                  targetUserMessageId={card.checkpoint.target.targetUserMessageId}
                   checkpoint={card.checkpoint}
                   workDir={card.workDir}
                   error={turnActionErrors[card.target.messageId] ?? null}

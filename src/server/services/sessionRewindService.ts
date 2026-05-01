@@ -1,6 +1,6 @@
 import type { UUID } from 'crypto'
 import { chmod, copyFile, mkdir, readFile, stat, unlink } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { createTwoFilesPatch, diffLines } from 'diff'
 import { ApiError } from '../middleware/errorHandler.js'
 import {
@@ -8,7 +8,7 @@ import {
 } from '../../utils/fileHistory.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { conversationService } from './conversationService.js'
-import { sessionService } from './sessionService.js'
+import { sessionService, type MessageEntry } from './sessionService.js'
 
 type RewindTarget = {
   targetUserMessageId: string
@@ -23,6 +23,14 @@ type RewindCodePreview = {
   filesChanged: string[]
   insertions: number
   deletions: number
+}
+
+type TranscriptFileChange = {
+  path: string
+  absolutePath: string
+  additions: number
+  deletions: number
+  diff?: string
 }
 
 export type RewindTargetSelector = {
@@ -409,6 +417,277 @@ function getNextUserMessageId(
   return userMessages[userMessageIndex + 1]?.id ?? null
 }
 
+function isWithinBaseDir(absolutePath: string, baseDir: string): boolean {
+  const relativePath = relative(baseDir, absolutePath)
+  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))
+}
+
+function normalizeTranscriptRelativePath(filePath: string): string {
+  return normalizeComparablePath(filePath).replace(/^\/+/, '')
+}
+
+function resolveTranscriptToolPath(
+  filePath: unknown,
+  baseDir: string,
+): { path: string; absolutePath: string } | null {
+  if (typeof filePath !== 'string' || !filePath.trim()) return null
+  const normalizedBaseDir = resolve(baseDir)
+  const absolutePath = isAbsolute(filePath)
+    ? resolve(filePath)
+    : resolve(normalizedBaseDir, filePath)
+  if (!isWithinBaseDir(absolutePath, normalizedBaseDir)) return null
+
+  return {
+    path: normalizeTranscriptRelativePath(relative(normalizedBaseDir, absolutePath)),
+    absolutePath,
+  }
+}
+
+function countTranscriptLines(content: string): number {
+  if (!content) return 0
+  const lines = content.split(/\r\n|\r|\n/)
+  if (lines[lines.length - 1] === '') {
+    lines.pop()
+  }
+  return lines.length
+}
+
+function buildTranscriptDiff(
+  oldPath: string,
+  newPath: string,
+  oldContent: string,
+  newContent: string,
+): string {
+  const oldLines = oldContent ? oldContent.split('\n') : []
+  const newLines = newContent ? newContent.split('\n') : []
+  if (oldLines.at(-1) === '') oldLines.pop()
+  if (newLines.at(-1) === '') newLines.pop()
+
+  return [
+    `diff --session a/${oldPath} b/${newPath}`,
+    `--- ${oldPath === '/dev/null' ? '/dev/null' : `a/${oldPath}`}`,
+    `+++ b/${newPath}`,
+    `@@ -1,${oldLines.length} +1,${newLines.length} @@`,
+    ...oldLines.map((line) => `-${line}`),
+    ...newLines.map((line) => `+${line}`),
+  ].join('\n')
+}
+
+function buildTranscriptEditChange(
+  filePath: { path: string; absolutePath: string },
+  input: Record<string, unknown>,
+): TranscriptFileChange {
+  const oldString = typeof input.old_string === 'string' ? input.old_string : ''
+  const newString = typeof input.new_string === 'string' ? input.new_string : ''
+  return {
+    path: filePath.path,
+    absolutePath: filePath.absolutePath,
+    additions: countTranscriptLines(newString),
+    deletions: countTranscriptLines(oldString),
+    diff: buildTranscriptDiff(filePath.path, filePath.path, oldString, newString),
+  }
+}
+
+function extractApplyPatchTranscriptChanges(
+  patch: unknown,
+  baseDir: string,
+): TranscriptFileChange[] {
+  if (typeof patch !== 'string') return []
+  const changes: TranscriptFileChange[] = []
+
+  for (const line of patch.split('\n')) {
+    const match = line.match(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/)
+    if (!match?.[1]) continue
+    const filePath = resolveTranscriptToolPath(match[1], baseDir)
+    if (!filePath) continue
+    changes.push({
+      path: filePath.path,
+      absolutePath: filePath.absolutePath,
+      additions: 0,
+      deletions: 0,
+    })
+  }
+
+  return changes
+}
+
+function extractTranscriptChangesFromTool(
+  toolName: string,
+  input: Record<string, unknown>,
+  baseDir: string,
+): TranscriptFileChange[] {
+  const normalizedToolName = toolName.toLowerCase()
+  if (normalizedToolName === 'write') {
+    const filePath = resolveTranscriptToolPath(input.file_path ?? input.path, baseDir)
+    if (!filePath) return []
+    const content = typeof input.content === 'string' ? input.content : ''
+    return [{
+      path: filePath.path,
+      absolutePath: filePath.absolutePath,
+      additions: countTranscriptLines(content),
+      deletions: 0,
+      diff: buildTranscriptDiff('/dev/null', filePath.path, '', content),
+    }]
+  }
+
+  if (normalizedToolName === 'edit') {
+    const filePath = resolveTranscriptToolPath(input.file_path ?? input.path, baseDir)
+    if (!filePath) return []
+    return [buildTranscriptEditChange(filePath, input)]
+  }
+
+  if (normalizedToolName === 'multiedit') {
+    const filePath = resolveTranscriptToolPath(input.file_path ?? input.path, baseDir)
+    if (!filePath || !Array.isArray(input.edits)) return []
+    return input.edits
+      .filter((edit): edit is Record<string, unknown> => !!edit && typeof edit === 'object')
+      .map((edit) => buildTranscriptEditChange(filePath, edit))
+  }
+
+  if (normalizedToolName === 'notebookedit') {
+    const filePath = resolveTranscriptToolPath(
+      input.notebook_path ?? input.file_path ?? input.path,
+      baseDir,
+    )
+    if (!filePath) return []
+    const oldString = typeof input.old_source === 'string' ? input.old_source : ''
+    const newString = typeof input.new_source === 'string' ? input.new_source : ''
+    return [{
+      path: filePath.path,
+      absolutePath: filePath.absolutePath,
+      additions: countTranscriptLines(newString),
+      deletions: countTranscriptLines(oldString),
+      diff: buildTranscriptDiff(filePath.path, filePath.path, oldString, newString),
+    }]
+  }
+
+  if (normalizedToolName === 'apply_patch') {
+    return extractApplyPatchTranscriptChanges(input.patch, baseDir)
+  }
+
+  return []
+}
+
+function getToolUseIds(messages: MessageEntry[]): Set<string> {
+  const ids = new Set<string>()
+  for (const message of messages) {
+    if (message.type !== 'tool_use' || !Array.isArray(message.content)) continue
+    for (const block of message.content) {
+      if (!block || typeof block !== 'object') continue
+      const record = block as Record<string, unknown>
+      if (record.type === 'tool_use' && typeof record.id === 'string') {
+        ids.add(record.id)
+      }
+    }
+  }
+  return ids
+}
+
+function getTranscriptTurnMessages(
+  activeMessages: MessageEntry[],
+  targetUserMessageId: string,
+): MessageEntry[] {
+  const range = getTurnMessageRange(activeMessages, targetUserMessageId)
+  if (!range) return []
+
+  const rawTurnMessages = activeMessages.slice(range.start + 1, range.end)
+  const parentTurnMessages = rawTurnMessages.filter((message) => !message.parentToolUseId)
+  const turnToolUseIds = getToolUseIds(parentTurnMessages)
+  if (turnToolUseIds.size === 0) return parentTurnMessages
+
+  const inlineChildMessages = rawTurnMessages.filter((message) =>
+    message.parentToolUseId && turnToolUseIds.has(message.parentToolUseId)
+  )
+  const turnMessages = [...parentTurnMessages, ...inlineChildMessages]
+  const includedIds = new Set(turnMessages.map((message) => message.id))
+  const childMessages = activeMessages.filter((message) =>
+    message.parentToolUseId &&
+    turnToolUseIds.has(message.parentToolUseId) &&
+    !includedIds.has(message.id)
+  )
+
+  return [...turnMessages, ...childMessages]
+}
+
+function collectTranscriptTurnFileChanges(
+  activeMessages: MessageEntry[],
+  targetUserMessageId: string,
+  baseDir: string,
+): TranscriptFileChange[] {
+  const turnMessages = getTranscriptTurnMessages(activeMessages, targetUserMessageId)
+  if (turnMessages.length === 0) return []
+
+  const changes = new Map<string, TranscriptFileChange>()
+  for (const message of turnMessages) {
+    if (message.type !== 'tool_use' || !Array.isArray(message.content)) continue
+
+    for (const block of message.content) {
+      if (!block || typeof block !== 'object') continue
+      const record = block as Record<string, unknown>
+      if (record.type !== 'tool_use' || typeof record.name !== 'string') continue
+      const input = record.input
+      if (!input || typeof input !== 'object') continue
+
+      for (const change of extractTranscriptChangesFromTool(
+        record.name,
+        input as Record<string, unknown>,
+        baseDir,
+      )) {
+        const existing = changes.get(change.path)
+        if (!existing) {
+          changes.set(change.path, change)
+          continue
+        }
+
+        changes.set(change.path, {
+          ...existing,
+          additions: existing.additions + change.additions,
+          deletions: existing.deletions + change.deletions,
+          diff: [existing.diff, change.diff].filter(Boolean).join('\n'),
+        })
+      }
+    }
+  }
+
+  return [...changes.values()].sort((a, b) => a.path.localeCompare(b.path))
+}
+
+function buildTranscriptTurnCodePreview(
+  activeMessages: MessageEntry[],
+  targetUserMessageId: string,
+  baseDir: string,
+): RewindCodePreview {
+  const changes = collectTranscriptTurnFileChanges(activeMessages, targetUserMessageId, baseDir)
+  if (changes.length === 0) {
+    return {
+      available: false,
+      reason: 'No transcript file changes were recorded for this turn.',
+      filesChanged: [],
+      insertions: 0,
+      deletions: 0,
+    }
+  }
+
+  return normalizeDiffStats({
+    filesChanged: changes.map((change) => change.absolutePath),
+    insertions: changes.reduce((total, change) => total + change.additions, 0),
+    deletions: changes.reduce((total, change) => total + change.deletions, 0),
+  })
+}
+
+function findTranscriptTurnDiff(
+  activeMessages: MessageEntry[],
+  targetUserMessageId: string,
+  baseDir: string,
+  requestedPath: string,
+): TranscriptFileChange | null {
+  const changes = collectTranscriptTurnFileChanges(activeMessages, targetUserMessageId, baseDir)
+  return changes.find((change) =>
+    matchesCheckpointPath(requestedPath, change.path, baseDir) ||
+    normalizeComparablePath(requestedPath) === normalizeComparablePath(change.absolutePath)
+  ) ?? null
+}
+
 async function getTurnBoundaryContents(
   sessionId: string,
   checkpointBaseDir: string,
@@ -670,15 +949,16 @@ export async function listSessionTurnCheckpoints(
     const nextSnapshot = nextUserMessageId && snapshots
       ? findTargetSnapshot(snapshots, nextUserMessageId)
       : null
-    const preview = targetSnapshot
+    const checkpointPreview = targetSnapshot
       ? await buildTurnCodePreview(sessionId, checkpointBaseDir, targetSnapshot, nextSnapshot)
-      : {
-          available: false,
-          reason: 'No file checkpoint is available for the selected message.',
-          filesChanged: [],
-          insertions: 0,
-          deletions: 0,
-        }
+      : null
+    const preview = checkpointPreview?.available && checkpointPreview.filesChanged.length > 0
+      ? checkpointPreview
+      : buildTranscriptTurnCodePreview(
+          activeMessages,
+          target.targetUserMessageId,
+          checkpointBaseDir,
+        )
 
     if (!preview.available || preview.filesChanged.length === 0) continue
     checkpoints.push(buildTurnPreview(target, preview, checkpointBaseDir))
@@ -699,6 +979,7 @@ export async function getSessionTurnCheckpointDiff(
     target.targetUserMessageId,
     workDir,
   )
+  const activeMessages = await sessionService.getSessionMessages(sessionId)
   const snapshots = await loadFileHistorySnapshots(sessionId)
   const missingResult = {
     target: buildTurnPreview(
@@ -715,17 +996,31 @@ export async function getSessionTurnCheckpointDiff(
     path: normalizeComparablePath(requestedPath),
     state: 'missing' as const,
   }
+  const transcriptChange = findTranscriptTurnDiff(
+    activeMessages,
+    target.targetUserMessageId,
+    checkpointBaseDir,
+    requestedPath,
+  )
+  const transcriptResult = transcriptChange?.diff
+    ? {
+        target: missingResult.target,
+        workDir: checkpointBaseDir,
+        path: transcriptChange.path,
+        state: 'ok' as const,
+        diff: transcriptChange.diff,
+      }
+    : null
 
   if (!snapshots) {
-    return missingResult
+    return transcriptResult ?? missingResult
   }
 
   const targetSnapshot = findTargetSnapshot(snapshots, target.targetUserMessageId)
   if (!targetSnapshot) {
-    return missingResult
+    return transcriptResult ?? missingResult
   }
-  const userMessages = (await sessionService.getSessionMessages(sessionId))
-    .filter((message) => message.type === 'user')
+  const userMessages = activeMessages.filter((message) => message.type === 'user')
   const nextUserMessageId = getNextUserMessageId(userMessages, target.userMessageIndex)
   const nextSnapshot = nextUserMessageId
     ? findTargetSnapshot(snapshots, nextUserMessageId)
@@ -781,7 +1076,7 @@ export async function getSessionTurnCheckpointDiff(
     }
   }
 
-  return missingResult
+  return transcriptResult ?? missingResult
 }
 
 export async function executeSessionRewind(

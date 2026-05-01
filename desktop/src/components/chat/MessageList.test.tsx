@@ -838,6 +838,7 @@ describe('MessageList nested tool calls', () => {
       ACTIVE_TAB,
       'user-1',
       'src/first.ts',
+      0,
     )
     expect(sessionsApi.getWorkspaceDiff).not.toHaveBeenCalled()
   })
@@ -905,6 +906,65 @@ describe('MessageList nested tool calls', () => {
       ACTIVE_TAB,
       'user-1',
       '/tmp/old-project/src/first.ts',
+      0,
+    )
+  })
+
+  it('matches live turn change checkpoints by user message index when transcript ids differ from local UI ids', async () => {
+    vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({
+      checkpoints: [
+        {
+          target: {
+            targetUserMessageId: 'transcript-user-1',
+            userMessageIndex: 0,
+            userMessageCount: 1,
+          },
+          code: {
+            available: true,
+            filesChanged: ['src/live.ts'],
+            insertions: 7,
+            deletions: 0,
+          },
+        },
+      ],
+    })
+    vi.spyOn(sessionsApi, 'getTurnCheckpointDiff').mockResolvedValue({
+      state: 'ok',
+      path: 'src/live.ts',
+      diff: 'diff --session a/src/live.ts b/src/live.ts\n+live',
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'local-user-temp-id',
+              type: 'user_text',
+              content: '实时这一轮',
+              timestamp: 1,
+            },
+            {
+              id: 'assistant-1',
+              type: 'assistant_text',
+              content: 'done',
+              timestamp: 2,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(await screen.findByText('src/live.ts')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Show diff for src/live.ts' }))
+    await screen.findByTestId('workspace-code')
+    expect(sessionsApi.getTurnCheckpointDiff).toHaveBeenCalledWith(
+      ACTIVE_TAB,
+      'transcript-user-1',
+      'src/live.ts',
+      0,
     )
   })
 

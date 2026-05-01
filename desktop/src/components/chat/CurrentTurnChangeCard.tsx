@@ -60,7 +60,12 @@ export function CurrentTurnChangeCard({
     }))
 
     void sessionsApi
-      .getTurnCheckpointDiff(sessionId, targetUserMessageId, fileEntry.apiPath)
+      .getTurnCheckpointDiff(
+        sessionId,
+        targetUserMessageId,
+        fileEntry.apiPath,
+        checkpoint.target.userMessageIndex,
+      )
       .then((result) => {
         setDiffByPath((current) => ({
           ...current,

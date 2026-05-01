@@ -2099,6 +2099,194 @@ describe('Sessions API', () => {
     expect(createdFileBody.diff).toContain('/dev/null')
   })
 
+  it('GET /api/sessions/:id/turn-checkpoints should fall back to transcript tool changes when file snapshots are missing', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000001'
+    const workDir = path.join(tmpDir, 'transcript-only-session')
+    const userId = crypto.randomUUID()
+    await fs.mkdir(path.join(workDir, 'todo-app', 'src'), { recursive: true })
+
+    await writeSessionFile('-tmp-transcript-only-session', sessionId, [
+      makeSessionMetaEntry(workDir),
+      {
+        ...makeUserEntry('build a todo app', userId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantToolUseEntry([
+        {
+          id: 'Write:1',
+          name: 'Write',
+          input: {
+            file_path: path.join(workDir, 'todo-app', 'src', 'App.tsx'),
+            content: 'export function App() {\n  return <main>Todo</main>\n}\n',
+          },
+        },
+        {
+          id: 'Write:2',
+          name: 'Write',
+          input: {
+            file_path: 'todo-app/vite.config.ts',
+            content: 'import { defineConfig } from "vite"\nexport default defineConfig({})\n',
+          },
+        },
+      ], userId),
+      makeAssistantEntry('Todo app created', userId),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      checkpoints: Array<{
+        target: { targetUserMessageId: string }
+        code: {
+          available: boolean
+          filesChanged: string[]
+          insertions: number
+          deletions: number
+        }
+        workDir: string
+      }>
+    }
+
+    expect(body.checkpoints).toHaveLength(1)
+    expect(body.checkpoints[0]!.target.targetUserMessageId).toBe(userId)
+    expect(body.checkpoints[0]!.workDir).toBe(workDir)
+    expect(body.checkpoints[0]!.code.available).toBe(true)
+    expect(body.checkpoints[0]!.code.filesChanged.sort()).toEqual([
+      path.join(workDir, 'todo-app', 'src', 'App.tsx'),
+      path.join(workDir, 'todo-app', 'vite.config.ts'),
+    ].sort())
+    expect(body.checkpoints[0]!.code.insertions).toBe(5)
+    expect(body.checkpoints[0]!.code.deletions).toBe(0)
+  })
+
+  it('GET /api/sessions/:id/turn-checkpoints/diff should return transcript tool diffs when file snapshots are missing', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000002'
+    const workDir = path.join(tmpDir, 'transcript-only-diff-session')
+    const userId = crypto.randomUUID()
+
+    await writeSessionFile('-tmp-transcript-only-diff-session', sessionId, [
+      makeSessionMetaEntry(workDir),
+      {
+        ...makeUserEntry('edit config', userId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantToolUseEntry([
+        {
+          id: 'Edit:1',
+          name: 'Edit',
+          input: {
+            file_path: path.join(workDir, 'todo-app', 'vite.config.ts'),
+            old_string: 'plugins: [react()]',
+            new_string: 'plugins: [react(), tailwindcss()]',
+          },
+        },
+      ], userId),
+      makeAssistantEntry('Config updated', userId),
+    ])
+
+    const res = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/turn-checkpoints/diff?targetUserMessageId=${userId}&path=${encodeURIComponent('todo-app/vite.config.ts')}`,
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      state: string
+      path: string
+      diff?: string
+      target: { targetUserMessageId: string }
+    }
+
+    expect(body.target.targetUserMessageId).toBe(userId)
+    expect(body.state).toBe('ok')
+    expect(body.path).toBe('todo-app/vite.config.ts')
+    expect(body.diff).toContain('diff --session a/todo-app/vite.config.ts b/todo-app/vite.config.ts')
+    expect(body.diff).toContain('-plugins: [react()]')
+    expect(body.diff).toContain('+plugins: [react(), tailwindcss()]')
+  })
+
+  it('GET /api/sessions/:id/turn-checkpoints should include subagent transcript file changes for the parent turn', async () => {
+    const sessionId = '99999999-bbbb-cccc-dddd-000000000003'
+    const workDir = path.join(tmpDir, 'transcript-subagent-session')
+    const firstUserId = crypto.randomUUID()
+    const secondUserId = crypto.randomUUID()
+    const agentMessageId = crypto.randomUUID()
+    await fs.mkdir(path.join(workDir, 'todo-app', 'src'), { recursive: true })
+
+    await writeSessionFile('-tmp-transcript-subagent-session', sessionId, [
+      makeSessionMetaEntry(workDir),
+      {
+        ...makeUserEntry('build a todo app', firstUserId),
+        cwd: workDir,
+        sessionId,
+      },
+      {
+        parentUuid: firstUserId,
+        isSidechain: false,
+        type: 'assistant',
+        message: {
+          model: 'claude-opus-4-7',
+          id: `msg_${crypto.randomUUID().slice(0, 20)}`,
+          type: 'message',
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'Agent:todo',
+            name: 'Agent',
+            input: { description: 'Create todo app files' },
+          }],
+        },
+        uuid: agentMessageId,
+        timestamp: '2026-01-01T00:02:00.000Z',
+      },
+      {
+        ...makeUserEntry('now explain it', secondUserId),
+        parentUuid: agentMessageId,
+        cwd: workDir,
+        sessionId,
+      },
+      {
+        parentUuid: agentMessageId,
+        isSidechain: true,
+        type: 'assistant',
+        message: {
+          model: 'claude-opus-4-7',
+          id: `msg_${crypto.randomUUID().slice(0, 20)}`,
+          type: 'message',
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'Write:child',
+            name: 'Write',
+            input: {
+              file_path: path.join(workDir, 'todo-app', 'src', 'Board.tsx'),
+              content: 'export function Board() {\n  return null\n}\n',
+            },
+          }],
+        },
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-01-01T00:03:00.000Z',
+      },
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/turn-checkpoints`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      checkpoints: Array<{
+        target: { targetUserMessageId: string }
+        code: { filesChanged: string[]; insertions: number; deletions: number }
+      }>
+    }
+
+    expect(body.checkpoints).toHaveLength(1)
+    expect(body.checkpoints[0]!.target.targetUserMessageId).toBe(firstUserId)
+    expect(body.checkpoints[0]!.code.filesChanged).toEqual([
+      path.join(workDir, 'todo-app', 'src', 'Board.tsx'),
+    ])
+    expect(body.checkpoints[0]!.code.insertions).toBe(3)
+    expect(body.checkpoints[0]!.code.deletions).toBe(0)
+  })
+
   it('POST /api/sessions/:id/rewind should restore the base state when rewinding the first turn of a three-turn file history', async () => {
     const fixture = await createThreeTurnCheckpointFixture(
       'aaaaaaaa-1111-2222-3333-444444444444',
