@@ -17,9 +17,9 @@ import { PermissionDialog } from './PermissionDialog'
 import { AskUserQuestion } from './AskUserQuestion'
 import { StreamingIndicator } from './StreamingIndicator'
 import { InlineTaskSummary } from './InlineTaskSummary'
+import { CurrentTurnChangeCard } from './CurrentTurnChangeCard'
 import type { AgentTaskNotification, UIMessage } from '../../types/chat'
-import { Modal } from '../shared/Modal'
-import { Button } from '../shared/Button'
+import { ConfirmDialog } from '../shared/ConfirmDialog'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
 type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
@@ -32,6 +32,20 @@ type RenderModel = {
   renderItems: RenderItem[]
   toolResultMap: Map<string, ToolResult>
   childToolCallsByParent: Map<string, ToolCall[]>
+}
+
+type RewindTurnTarget = {
+  messageId: string
+  userMessageIndex: number
+  content: string
+  expectedContent: string
+  attachments?: Extract<UIMessage, { type: 'user_text' }>['attachments']
+}
+
+type CurrentTurnPreview = {
+  target: RewindTurnTarget
+  preview: SessionRewindResponse
+  workDir: string | null
 }
 
 function appendChildToolCall(
@@ -104,8 +118,45 @@ export function buildRenderModel(messages: UIMessage[]): RenderModel {
   return { renderItems: items, toolResultMap, childToolCallsByParent }
 }
 
+export function getLatestCompletedTurnTarget(messages: UIMessage[]): RewindTurnTarget | null {
+  let userMessageIndex = -1
+  let latestTarget: (RewindTurnTarget & { messageOffset: number }) | null = null
+
+  for (let messageOffset = 0; messageOffset < messages.length; messageOffset += 1) {
+    const message = messages[messageOffset]
+    if (!message || message.type !== 'user_text' || message.pending) continue
+    userMessageIndex += 1
+    latestTarget = {
+      messageId: message.id,
+      userMessageIndex,
+      content: message.content,
+      expectedContent: message.modelContent ?? message.content,
+      attachments: message.attachments,
+      messageOffset,
+    }
+  }
+
+  if (!latestTarget) return null
+
+  const hasResponseAfterTarget = messages
+    .slice(latestTarget.messageOffset + 1)
+    .some((message) =>
+      message.type === 'assistant_text' ||
+      message.type === 'tool_use' ||
+      message.type === 'tool_result' ||
+      message.type === 'error' ||
+      message.type === 'task_summary',
+    )
+
+  if (!hasResponseAfterTarget) return null
+
+  const { messageOffset: _messageOffset, ...target } = latestTarget
+  return target
+}
+
 type MessageListProps = {
   sessionId?: string | null
+  compact?: boolean
 }
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 48
@@ -117,7 +168,7 @@ function isNearScrollBottom(element: HTMLElement) {
   )
 }
 
-export function MessageList({ sessionId }: MessageListProps = {}) {
+export function MessageList({ sessionId, compact = false }: MessageListProps = {}) {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const resolvedSessionId = sessionId ?? activeTabId
   const sessionState = useChatStore((s) =>
@@ -140,16 +191,11 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
   const shouldAutoScrollRef = useRef(true)
   const lastSessionIdRef = useRef<string | null | undefined>(resolvedSessionId)
   const t = useTranslation()
-  const [rewindTarget, setRewindTarget] = useState<{
-    messageId: string
-    userMessageIndex: number
-    content: string
-    attachments?: Extract<UIMessage, { type: 'user_text' }>['attachments']
-  } | null>(null)
-  const [rewindPreview, setRewindPreview] = useState<SessionRewindResponse | null>(null)
-  const [rewindError, setRewindError] = useState<string | null>(null)
-  const [isLoadingPreview, setIsLoadingPreview] = useState(false)
-  const [isExecutingRewind, setIsExecutingRewind] = useState(false)
+  const [currentTurnPreview, setCurrentTurnPreview] = useState<CurrentTurnPreview | null>(null)
+  const [currentTurnError, setCurrentTurnError] = useState<string | null>(null)
+  const [isLoadingCurrentTurnPreview, setIsLoadingCurrentTurnPreview] = useState(false)
+  const [isUndoingCurrentTurn, setIsUndoingCurrentTurn] = useState(false)
+  const [currentTurnUndoConfirmOpen, setCurrentTurnUndoConfirmOpen] = useState(false)
 
   const updateAutoScrollState = useCallback(() => {
     const container = scrollContainerRef.current
@@ -168,25 +214,50 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
     bottomRef.current?.scrollIntoView?.({ behavior: 'smooth' })
   }, [messages.length, resolvedSessionId, streamingText])
 
+  const { toolResultMap, childToolCallsByParent, renderItems } = useMemo(
+    () => buildRenderModel(messages),
+    [messages],
+  )
+  const latestTurnTarget = useMemo(() => getLatestCompletedTurnTarget(messages), [messages])
+
   useEffect(() => {
-    if (!resolvedSessionId || !rewindTarget) return
+    if (
+      !resolvedSessionId ||
+      !latestTurnTarget ||
+      chatState !== 'idle' ||
+      isMemberSession
+    ) {
+      setCurrentTurnPreview(null)
+      setCurrentTurnError(null)
+      setIsLoadingCurrentTurnPreview(false)
+      return
+    }
 
     let cancelled = false
-    setIsLoadingPreview(true)
-    setRewindPreview(null)
-    setRewindError(null)
+    setIsLoadingCurrentTurnPreview(true)
+    setCurrentTurnPreview(null)
+    setCurrentTurnError(null)
 
-    void sessionsApi
-      .rewind(resolvedSessionId, {
-        targetUserMessageId: rewindTarget.messageId,
-        userMessageIndex: rewindTarget.userMessageIndex,
-        expectedContent: rewindTarget.content,
+    Promise.all([
+      sessionsApi.rewind(resolvedSessionId, {
+        targetUserMessageId: latestTurnTarget.messageId,
+        userMessageIndex: latestTurnTarget.userMessageIndex,
+        expectedContent: latestTurnTarget.expectedContent,
         dryRun: true,
-      })
-      .then((preview) => {
-        if (!cancelled) {
-          setRewindPreview(preview)
+      }),
+      sessionsApi.getWorkspaceStatus(resolvedSessionId).catch(() => null),
+    ])
+      .then(([preview, workspaceStatus]) => {
+        if (cancelled) return
+        if (!preview.code.available || preview.code.filesChanged.length === 0) {
+          setCurrentTurnPreview(null)
+          return
         }
+        setCurrentTurnPreview({
+          target: latestTurnTarget,
+          preview,
+          workDir: workspaceStatus?.workDir ?? null,
+        })
       })
       .catch((error) => {
         if (cancelled) return
@@ -198,37 +269,25 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
             : error instanceof Error
               ? error.message
               : String(error)
-        setRewindError(message)
+        setCurrentTurnError(message)
       })
       .finally(() => {
         if (!cancelled) {
-          setIsLoadingPreview(false)
+          setIsLoadingCurrentTurnPreview(false)
         }
       })
 
     return () => {
       cancelled = true
     }
-  }, [resolvedSessionId, rewindTarget])
+  }, [chatState, isMemberSession, latestTurnTarget, resolvedSessionId])
 
-  const { toolResultMap, childToolCallsByParent, renderItems } = useMemo(
-    () => buildRenderModel(messages),
-    [messages],
-  )
+  const handleUndoCurrentTurn = useCallback(async () => {
+    if (!resolvedSessionId || !currentTurnPreview || isUndoingCurrentTurn) return
 
-  const closeRewindModal = useCallback(() => {
-    if (isExecutingRewind) return
-    setRewindTarget(null)
-    setRewindPreview(null)
-    setRewindError(null)
-    setIsLoadingPreview(false)
-  }, [isExecutingRewind])
-
-  const handleConfirmRewind = useCallback(async () => {
-    if (!resolvedSessionId || !rewindTarget || isExecutingRewind) return
-
-    setIsExecutingRewind(true)
-    setRewindError(null)
+    const target = currentTurnPreview.target
+    setIsUndoingCurrentTurn(true)
+    setCurrentTurnError(null)
 
     try {
       if (chatState !== 'idle') {
@@ -236,15 +295,15 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
       }
 
       const result = await sessionsApi.rewind(resolvedSessionId, {
-        targetUserMessageId: rewindTarget.messageId,
-        userMessageIndex: rewindTarget.userMessageIndex,
-        expectedContent: rewindTarget.content,
+        targetUserMessageId: target.messageId,
+        userMessageIndex: target.userMessageIndex,
+        expectedContent: target.expectedContent,
       })
 
       await reloadHistory(resolvedSessionId)
       queueComposerPrefill(resolvedSessionId, {
-        text: rewindTarget.content,
-        attachments: rewindTarget.attachments,
+        text: target.content,
+        attachments: target.attachments,
       })
 
       addToast({
@@ -258,8 +317,8 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
             }),
       })
 
-      setRewindTarget(null)
-      setRewindPreview(null)
+      setCurrentTurnPreview(null)
+      setCurrentTurnUndoConfirmOpen(false)
     } catch (error) {
       const message =
         error instanceof ApiError
@@ -269,31 +328,30 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
           : error instanceof Error
             ? error.message
             : String(error)
-      setRewindError(message)
+      setCurrentTurnError(message)
+      setCurrentTurnUndoConfirmOpen(false)
     } finally {
-      setIsExecutingRewind(false)
+      setIsUndoingCurrentTurn(false)
     }
   }, [
     addToast,
     chatState,
-    isExecutingRewind,
+    currentTurnPreview,
+    isUndoingCurrentTurn,
     queueComposerPrefill,
     reloadHistory,
     resolvedSessionId,
-    rewindTarget,
     stopGeneration,
     t,
   ])
-
-  let visibleUserMessageIndex = -1
 
   return (
     <div
       ref={scrollContainerRef}
       onScroll={updateAutoScrollState}
-      className="flex-1 overflow-y-auto px-4 py-4"
+      className={`flex-1 overflow-y-auto ${compact ? 'px-3 py-3 pb-5' : 'px-4 py-4'}`}
     >
-      <div className="mx-auto max-w-[860px]">
+      <div className={compact ? 'mx-auto max-w-full' : 'mx-auto max-w-[860px]'}>
         {renderItems.map((item) => {
           if (item.kind === 'tool_group') {
             return (
@@ -312,10 +370,6 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
           }
 
           const msg = item.message
-          const rewindableUserIndex =
-            msg.type === 'user_text' && !msg.pending
-              ? ++visibleUserMessageIndex
-              : null
           return (
             <MessageBlock
               key={msg.id}
@@ -329,19 +383,6 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
                       return r ? { content: r.content, isError: r.isError } : null
                     })()
                   : null
-              }
-              rewindableUserIndex={rewindableUserIndex}
-              onRequestRewind={
-                !isMemberSession
-                  ? (message, userMessageIndex) => {
-                      setRewindTarget({
-                        messageId: message.id,
-                        userMessageIndex,
-                        content: message.content,
-                        attachments: message.attachments,
-                      })
-                    }
-                  : undefined
               }
             />
           )
@@ -359,121 +400,43 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
           <StreamingIndicator />
         )}
 
+        {!isLoadingCurrentTurnPreview && currentTurnPreview && resolvedSessionId && (
+          <CurrentTurnChangeCard
+            sessionId={resolvedSessionId}
+            preview={currentTurnPreview.preview}
+            workDir={currentTurnPreview.workDir}
+            error={currentTurnError}
+            isUndoing={isUndoingCurrentTurn}
+            onUndo={() => {
+              setCurrentTurnUndoConfirmOpen(true)
+            }}
+          />
+        )}
+
+        {!currentTurnPreview && currentTurnError && (
+          <div className="mx-auto mb-5 w-full max-w-[860px] rounded-[var(--radius-lg)] border border-[var(--color-error)]/25 bg-[var(--color-error-container)]/18 px-4 py-3 text-xs text-[var(--color-error)]">
+            {currentTurnError}
+          </div>
+        )}
+
         <div ref={bottomRef} />
       </div>
 
-      <Modal
-        open={Boolean(rewindTarget)}
-        onClose={closeRewindModal}
-        title={t('chat.rewindModalTitle')}
-        footer={
-          <>
-            <Button
-              variant="ghost"
-              onClick={closeRewindModal}
-              disabled={isExecutingRewind}
-            >
-              {t('common.cancel')}
-            </Button>
-            <Button
-              onClick={() => {
-                void handleConfirmRewind()
-              }}
-              loading={isExecutingRewind}
-              disabled={isLoadingPreview || Boolean(rewindError)}
-              icon={
-                !isExecutingRewind ? (
-                  <span className="material-symbols-outlined text-[16px]">undo</span>
-                ) : undefined
-              }
-            >
-              {t('chat.rewindConfirm')}
-            </Button>
-          </>
-        }
-      >
-        <div className="space-y-4">
-          <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">
-              {t('chat.rewindPromptLabel')}
-            </div>
-            <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--color-text-primary)]">
-              {rewindTarget?.content || t('chat.rewindAttachmentOnly')}
-            </div>
-          </div>
-
-          {isLoadingPreview && (
-            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 text-sm text-[var(--color-text-secondary)]">
-              {t('chat.rewindLoading')}
-            </div>
-          )}
-
-          {!isLoadingPreview && rewindPreview && (
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
-              <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
-                  <span className="material-symbols-outlined text-[16px] text-[var(--color-brand)]">history</span>
-                  {t('chat.rewindConversationCardTitle')}
-                </div>
-                <p className="text-sm leading-relaxed text-[var(--color-text-secondary)]">
-                  {t('chat.rewindConversationCardBody', {
-                    count: rewindPreview.conversation.messagesRemoved,
-                  })}
-                </p>
-              </div>
-
-              <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
-                  <span className="material-symbols-outlined text-[16px] text-[var(--color-brand)]">code</span>
-                  {t('chat.rewindCodeCardTitle')}
-                </div>
-                {rewindPreview.code.available ? (
-                  <div className="space-y-1 text-sm text-[var(--color-text-secondary)]">
-                    <div>{t('chat.rewindCodeFiles', { count: rewindPreview.code.filesChanged.length })}</div>
-                    <div>{t('chat.rewindCodeInsertions', { count: rewindPreview.code.insertions })}</div>
-                    <div>{t('chat.rewindCodeDeletions', { count: rewindPreview.code.deletions })}</div>
-                  </div>
-                ) : (
-                  <p className="text-sm leading-relaxed text-[var(--color-text-secondary)]">
-                    {rewindPreview.code.reason || t('chat.rewindCodeUnavailable')}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {!isLoadingPreview && rewindPreview?.code.available && rewindPreview.code.filesChanged.length > 0 && (
-            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">
-                {t('chat.rewindFilesLabel')}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {rewindPreview.code.filesChanged.slice(0, 8).map((filePath) => (
-                  <span
-                    key={filePath}
-                    className="rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1 text-[11px] text-[var(--color-text-secondary)]"
-                  >
-                    {filePath}
-                  </span>
-                ))}
-                {rewindPreview.code.filesChanged.length > 8 && (
-                  <span className="rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1 text-[11px] text-[var(--color-text-secondary)]">
-                    {t('chat.rewindFilesMore', {
-                      count: rewindPreview.code.filesChanged.length - 8,
-                    })}
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-
-          {rewindError && (
-            <div className="rounded-[var(--radius-lg)] border border-[var(--color-error)]/30 bg-[var(--color-error-container)]/22 px-4 py-3 text-sm text-[var(--color-error)]">
-              {rewindError}
-            </div>
-          )}
-        </div>
-      </Modal>
+      <ConfirmDialog
+        open={currentTurnUndoConfirmOpen}
+        onClose={() => {
+          if (!isUndoingCurrentTurn) {
+            setCurrentTurnUndoConfirmOpen(false)
+          }
+        }}
+        onConfirm={handleUndoCurrentTurn}
+        title={t('chat.turnChangesConfirmTitle')}
+        body={t('chat.turnChangesConfirmBody')}
+        confirmLabel={t('chat.turnChangesConfirmUndo')}
+        cancelLabel={t('common.cancel')}
+        confirmVariant="danger"
+        loading={isUndoingCurrentTurn}
+      />
     </div>
   )
 }
@@ -483,18 +446,11 @@ export const MessageBlock = memo(function MessageBlock({
   activeThinkingId,
   agentTaskNotifications,
   toolResult,
-  rewindableUserIndex,
-  onRequestRewind,
 }: {
   message: UIMessage
   activeThinkingId: string | null
   agentTaskNotifications: Record<string, AgentTaskNotification>
   toolResult?: { content: unknown; isError: boolean } | null
-  rewindableUserIndex?: number | null
-  onRequestRewind?: (
-    message: Extract<UIMessage, { type: 'user_text' }>,
-    userMessageIndex: number,
-  ) => void
 }) {
   const t = useTranslation()
 
@@ -504,12 +460,6 @@ export const MessageBlock = memo(function MessageBlock({
         <UserMessage
           content={message.content}
           attachments={message.attachments}
-          onRewind={
-            typeof rewindableUserIndex === 'number' && onRequestRewind
-              ? () => onRequestRewind(message, rewindableUserIndex)
-              : undefined
-          }
-          rewindLabel={t('chat.rewindAction')}
         />
       )
     case 'assistant_text':

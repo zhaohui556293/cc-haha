@@ -92,7 +92,7 @@ type ChatStore = {
     sessionId: string,
     content: string,
     attachments?: AttachmentRef[],
-    options?: { displayContent?: string },
+    options?: { displayContent?: string; displayAttachments?: AttachmentRef[] },
   ) => void
   respondToPermission: (
     sessionId: string,
@@ -265,13 +265,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const userFacingContent =
       options?.displayContent?.trim() || content.trim()
     const isMemberSession = !!useTeamStore.getState().getMemberBySessionId(sessionId)
+    const visibleAttachments = options?.displayAttachments ?? attachments
     const uiAttachments: UIAttachment[] | undefined =
-      attachments && attachments.length > 0
-        ? attachments.map((a) => ({
+      visibleAttachments && visibleAttachments.length > 0
+        ? visibleAttachments.map((a) => ({
             type: a.type,
             name: a.name || a.path || a.mimeType || a.type,
+            path: a.path,
             data: a.data,
             mimeType: a.mimeType,
+            lineStart: a.lineStart,
+            lineEnd: a.lineEnd,
+            note: a.note,
+            quote: a.quote,
           }))
         : undefined
 
@@ -309,6 +315,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         id: nextId(),
         type: 'user_text',
         content: userFacingContent,
+        ...(userFacingContent !== content ? { modelContent: content } : {}),
         attachments: isMemberSession ? undefined : uiAttachments,
         timestamp: Date.now(),
         ...(isMemberSession ? { pending: true } : {}),
@@ -918,6 +925,43 @@ type HistoryMappingOptions = {
   includeTeammateMessages?: boolean
 }
 
+function getReferenceName(referencePath: string): string {
+  const normalized = referencePath.replace(/\\/g, '/').replace(/\/+$/, '')
+  const name = normalized.split('/').filter(Boolean).pop()
+  return name || referencePath
+}
+
+function extractLeadingFileReferences(text: string): {
+  content: string
+  attachments?: UIAttachment[]
+  modelContent?: string
+} {
+  const attachments: UIAttachment[] = []
+  let remaining = text
+
+  while (true) {
+    const match = remaining.match(/^@"([^"]+)"\s*/)
+    if (!match?.[1]) break
+
+    attachments.push({
+      type: 'file',
+      name: getReferenceName(match[1]),
+      path: match[1],
+    })
+    remaining = remaining.slice(match[0].length)
+  }
+
+  if (attachments.length === 0) {
+    return { content: text }
+  }
+
+  return {
+    content: remaining.trimStart(),
+    attachments,
+    modelContent: text,
+  }
+}
+
 /**
  * Reconstruct agentTaskNotifications from history.
  *
@@ -1013,7 +1057,15 @@ export function mapHistoryMessagesToUiMessages(
         })
         continue
       }
-      uiMessages.push({ id: msg.id || nextId(), type: 'user_text', content: msg.content, timestamp })
+      const parsed = extractLeadingFileReferences(msg.content)
+      uiMessages.push({
+        id: msg.id || nextId(),
+        type: 'user_text',
+        content: parsed.content,
+        ...(parsed.modelContent ? { modelContent: parsed.modelContent } : {}),
+        ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
+        timestamp,
+      })
       continue
     }
     if (msg.type === 'assistant' && typeof msg.content === 'string') {
@@ -1043,7 +1095,16 @@ export function mapHistoryMessagesToUiMessages(
         else if (block.type === 'tool_result') uiMessages.push({ id: nextId(), type: 'tool_result', toolUseId: block.tool_use_id ?? '', content: block.content, isError: !!block.is_error, timestamp, parentToolUseId: msg.parentToolUseId })
       }
       if (textParts.length > 0 || attachments.length > 0) {
-        uiMessages.push({ id: msg.id || nextId(), type: 'user_text', content: textParts.join('\n'), attachments: attachments.length > 0 ? attachments : undefined, timestamp })
+        const parsed = extractLeadingFileReferences(textParts.join('\n'))
+        const allAttachments = [...(parsed.attachments ?? []), ...attachments]
+        uiMessages.push({
+          id: msg.id || nextId(),
+          type: 'user_text',
+          content: parsed.content,
+          ...(parsed.modelContent ? { modelContent: parsed.modelContent } : {}),
+          attachments: allAttachments.length > 0 ? allAttachments : undefined,
+          timestamp,
+        })
       }
     }
   }

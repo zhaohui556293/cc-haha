@@ -231,6 +231,117 @@ describe('chatStore history mapping', () => {
     ])
   })
 
+  it('restores CLI file mentions as visible attachment chips from transcript history', () => {
+    const messages: MessageEntry[] = [
+      {
+        id: 'user-with-file-mention',
+        type: 'user',
+        timestamp: '2026-04-06T00:00:00.000Z',
+        content: '@"/private/tmp/example/src/sentinel.ts" 这个常量是什么？',
+      },
+    ]
+
+    const mapped = mapHistoryMessagesToUiMessages(messages)
+
+    expect(mapped).toMatchObject([
+      {
+        id: 'user-with-file-mention',
+        type: 'user_text',
+        content: '这个常量是什么？',
+        modelContent: '@"/private/tmp/example/src/sentinel.ts" 这个常量是什么？',
+        attachments: [{
+          type: 'file',
+          name: 'sentinel.ts',
+          path: '/private/tmp/example/src/sentinel.ts',
+        }],
+      },
+    ])
+  })
+
+  it('keeps workspace reference chips visible while sending CLI attachment paths', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: {
+          messages: [],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    useChatStore.getState().sendMessage(
+      TEST_SESSION_ID,
+      'Notes for attached workspace files:\n- src/App.tsx:L4\n  Comment: tighten this',
+      [{
+        type: 'file',
+        name: 'App.tsx',
+        path: '/repo/src/App.tsx',
+        lineStart: 4,
+        lineEnd: 4,
+        note: 'tighten this',
+        quote: 'const value = 1',
+      }],
+      {
+        displayContent: '改这里',
+        displayAttachments: [{
+          type: 'file',
+          name: 'App.tsx',
+          path: 'src/App.tsx',
+          lineStart: 4,
+          lineEnd: 4,
+          note: 'tighten this',
+          quote: 'const value = 1',
+        }],
+      },
+    )
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
+      {
+        type: 'user_text',
+        content: '改这里',
+        modelContent: 'Notes for attached workspace files:\n- src/App.tsx:L4\n  Comment: tighten this',
+        attachments: [{
+          type: 'file',
+          name: 'App.tsx',
+          path: 'src/App.tsx',
+          lineStart: 4,
+          lineEnd: 4,
+          note: 'tighten this',
+          quote: 'const value = 1',
+        }],
+      },
+    ])
+    expect(sendMock).toHaveBeenCalledWith(
+      TEST_SESSION_ID,
+      {
+        type: 'user_message',
+        content: 'Notes for attached workspace files:\n- src/App.tsx:L4\n  Comment: tighten this',
+        attachments: [{
+          type: 'file',
+          name: 'App.tsx',
+          path: '/repo/src/App.tsx',
+          lineStart: 4,
+          lineEnd: 4,
+          note: 'tighten this',
+          quote: 'const value = 1',
+        }],
+      },
+    )
+  })
+
   it('keeps parent tool linkage for live tool events', () => {
     // Initialize the session first
     useChatStore.setState({

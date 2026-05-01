@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import * as fs from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { SessionService } from '../services/sessionService.js'
@@ -75,6 +76,34 @@ async function writeSkill(
   )
 }
 
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+  })
+}
+
+async function createWorkspaceApiGitRepo(baseDir: string): Promise<string> {
+  const workDir = path.join(
+    baseDir,
+    `workspace-api-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  )
+
+  await fs.mkdir(path.join(workDir, 'src'), { recursive: true })
+  git(workDir, 'init')
+  git(workDir, 'config', 'user.email', 'sessions-api@example.com')
+  git(workDir, 'config', 'user.name', 'Sessions API')
+
+  await fs.writeFile(path.join(workDir, 'tracked.txt'), 'before\n')
+  await fs.writeFile(path.join(workDir, 'src', 'app.ts'), 'export const answer = 42\n')
+  git(workDir, 'add', 'tracked.txt', 'src/app.ts')
+  git(workDir, 'commit', '-m', 'initial')
+
+  await fs.writeFile(path.join(workDir, 'tracked.txt'), 'before\nafter\n')
+
+  return workDir
+}
+
 // Sample entries matching real CLI format
 function makeSnapshotEntry(): Record<string, unknown> {
   return {
@@ -130,6 +159,31 @@ function makeAssistantEntry(content: string, parentUuid?: string): Record<string
       type: 'message',
       role: 'assistant',
       content: [{ type: 'text', text: content }],
+    },
+    uuid: crypto.randomUUID(),
+    timestamp: '2026-01-01T00:02:00.000Z',
+  }
+}
+
+function makeAssistantToolUseEntry(
+  toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }>,
+  parentUuid?: string,
+): Record<string, unknown> {
+  return {
+    parentUuid: parentUuid || null,
+    isSidechain: false,
+    type: 'assistant',
+    message: {
+      model: 'claude-opus-4-7',
+      id: `msg_${crypto.randomUUID().slice(0, 20)}`,
+      type: 'message',
+      role: 'assistant',
+      content: toolUses.map((toolUse) => ({
+        type: 'tool_use',
+        id: toolUse.id,
+        name: toolUse.name,
+        input: toolUse.input,
+      })),
     },
     uuid: crypto.randomUUID(),
     timestamp: '2026-01-01T00:02:00.000Z',
@@ -930,6 +984,301 @@ describe('Sessions API', () => {
     )
   })
 
+  it('GET /api/sessions/:id/workspace/status|tree|file|diff should return workspace data', async () => {
+    const workDir = await createWorkspaceApiGitRepo(tmpDir)
+    const { sessionId } = await service.createSession(workDir)
+
+    const statusRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workspace/status`)
+    expect(statusRes.status).toBe(200)
+    const statusBody = await statusRes.json() as {
+      state: string
+      workDir: string
+      changedFiles: Array<{ path: string; status: string }>
+      isGitRepo: boolean
+    }
+    expect(statusBody.state).toBe('ok')
+    expect(statusBody.workDir).toBe(workDir)
+    expect(statusBody.isGitRepo).toBe(true)
+    expect(statusBody.changedFiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'tracked.txt', status: 'modified' }),
+      ]),
+    )
+
+    const treeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workspace/tree`)
+    expect(treeRes.status).toBe(200)
+    const treeBody = await treeRes.json() as {
+      state: string
+      path: string
+      entries: Array<{ name: string; path: string; isDirectory: boolean }>
+    }
+    expect(treeBody).toMatchObject({
+      state: 'ok',
+      path: '',
+    })
+    expect(treeBody.entries).toEqual([
+      { name: 'src', path: 'src', isDirectory: true },
+      { name: 'tracked.txt', path: 'tracked.txt', isDirectory: false },
+    ])
+
+    const fileRes = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/workspace/file?path=${encodeURIComponent('src/app.ts')}`,
+    )
+    expect(fileRes.status).toBe(200)
+    const fileBody = await fileRes.json() as {
+      state: string
+      path: string
+      content?: string
+      language: string
+      size: number
+    }
+    expect(fileBody).toMatchObject({
+      state: 'ok',
+      path: 'src/app.ts',
+      language: 'typescript',
+      size: 25,
+      content: 'export const answer = 42\n',
+    })
+
+    const diffRes = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/workspace/diff?path=${encodeURIComponent('tracked.txt')}`,
+    )
+    expect(diffRes.status).toBe(200)
+    const diffBody = await diffRes.json() as {
+      state: string
+      path: string
+      diff?: string
+    }
+    expect(diffBody.state).toBe('ok')
+    expect(diffBody.path).toBe('tracked.txt')
+    expect(diffBody.diff).toContain('tracked.txt')
+  })
+
+  it('GET /api/sessions/:id/workspace/* should surface transcript changes for a non-git tmp session', async () => {
+    const sessionId = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff'
+    const workDir = await fs.mkdtemp(path.join(tmpDir, 'workspace-api-non-git-'))
+    const srcDir = path.join(workDir, 'src')
+    const notesDir = path.join(workDir, 'notes')
+    const assetsDir = path.join(workDir, 'assets')
+
+    await fs.mkdir(srcDir, { recursive: true })
+    await fs.mkdir(notesDir, { recursive: true })
+    await fs.mkdir(assetsDir, { recursive: true })
+    await fs.writeFile(path.join(workDir, 'README.md'), '# Temporary project\n')
+    await fs.writeFile(path.join(srcDir, 'app.ts'), 'export const answer = 2\n')
+    await fs.writeFile(path.join(notesDir, 'todo.md'), '- ship workspace panel\n')
+    await fs.writeFile(
+      path.join(assetsDir, 'pixel.png'),
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    )
+
+    await writeSessionFile(sanitizePath(workDir), sessionId, [
+      makeSnapshotEntry(),
+      makeSessionMetaEntry(workDir),
+      makeUserEntry('Update this temporary project'),
+      makeAssistantToolUseEntry([
+        {
+          id: 'toolu-edit-app',
+          name: 'Edit',
+          input: {
+            file_path: path.join(workDir, 'src', 'app.ts'),
+            old_string: 'export const answer = 1\n',
+            new_string: 'export const answer = 2\n',
+          },
+        },
+        {
+          id: 'toolu-write-todo',
+          name: 'Write',
+          input: {
+            file_path: path.join(workDir, 'notes', 'todo.md'),
+            content: '- ship workspace panel\n',
+          },
+        },
+      ]),
+    ])
+
+    const statusRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workspace/status`)
+    expect(statusRes.status).toBe(200)
+    const statusBody = await statusRes.json() as {
+      state: string
+      workDir: string
+      repoName: string | null
+      branch: string | null
+      isGitRepo: boolean
+      changedFiles: Array<{
+        path: string
+        status: string
+        additions: number
+        deletions: number
+      }>
+    }
+    expect(statusBody).toMatchObject({
+      state: 'ok',
+      workDir,
+      repoName: path.basename(workDir),
+      branch: null,
+      isGitRepo: false,
+    })
+    expect(statusBody.changedFiles).toEqual([
+      expect.objectContaining({
+        path: 'notes/todo.md',
+        status: 'added',
+        additions: 1,
+        deletions: 0,
+      }),
+      expect.objectContaining({
+        path: 'src/app.ts',
+        status: 'modified',
+        additions: 1,
+        deletions: 1,
+      }),
+    ])
+
+    const treeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workspace/tree`)
+    expect(treeRes.status).toBe(200)
+    const treeBody = await treeRes.json() as {
+      state: string
+      path: string
+      entries: Array<{ name: string; path: string; isDirectory: boolean }>
+    }
+    expect(treeBody).toMatchObject({ state: 'ok', path: '' })
+    expect(treeBody.entries).toEqual([
+      { name: 'assets', path: 'assets', isDirectory: true },
+      { name: 'notes', path: 'notes', isDirectory: true },
+      { name: 'src', path: 'src', isDirectory: true },
+      { name: 'README.md', path: 'README.md', isDirectory: false },
+    ])
+
+    const srcTreeRes = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/workspace/tree?path=${encodeURIComponent('src')}`,
+    )
+    expect(srcTreeRes.status).toBe(200)
+    expect(await srcTreeRes.json()).toMatchObject({
+      state: 'ok',
+      path: 'src',
+      entries: [{ name: 'app.ts', path: 'src/app.ts', isDirectory: false }],
+    })
+
+    const fileRes = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/workspace/file?path=${encodeURIComponent('src/app.ts')}`,
+    )
+    expect(fileRes.status).toBe(200)
+    expect(await fileRes.json()).toMatchObject({
+      state: 'ok',
+      path: 'src/app.ts',
+      previewType: 'text',
+      language: 'typescript',
+      content: 'export const answer = 2\n',
+    })
+
+    const imageRes = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/workspace/file?path=${encodeURIComponent('assets/pixel.png')}`,
+    )
+    expect(imageRes.status).toBe(200)
+    const imageBody = await imageRes.json() as {
+      state: string
+      path: string
+      previewType: string
+      mimeType: string
+      dataUrl: string
+    }
+    expect(imageBody).toMatchObject({
+      state: 'ok',
+      path: 'assets/pixel.png',
+      previewType: 'image',
+      mimeType: 'image/png',
+    })
+    expect(imageBody.dataUrl).toStartWith('data:image/png;base64,')
+
+    const appDiffRes = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/workspace/diff?path=${encodeURIComponent('src/app.ts')}`,
+    )
+    expect(appDiffRes.status).toBe(200)
+    const appDiffBody = await appDiffRes.json() as { state: string; path: string; diff?: string }
+    expect(appDiffBody).toMatchObject({ state: 'ok', path: 'src/app.ts' })
+    expect(appDiffBody.diff).toContain('diff --session a/src/app.ts b/src/app.ts')
+    expect(appDiffBody.diff).toContain('-export const answer = 1')
+    expect(appDiffBody.diff).toContain('+export const answer = 2')
+
+    const todoDiffRes = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/workspace/diff?path=${encodeURIComponent('notes/todo.md')}`,
+    )
+    expect(todoDiffRes.status).toBe(200)
+    const todoDiffBody = await todoDiffRes.json() as { state: string; path: string; diff?: string }
+    expect(todoDiffBody).toMatchObject({ state: 'ok', path: 'notes/todo.md' })
+    expect(todoDiffBody.diff).toContain('--- /dev/null')
+    expect(todoDiffBody.diff).toContain('+++ b/notes/todo.md')
+    expect(todoDiffBody.diff).toContain('+- ship workspace panel')
+  })
+
+  it('GET /api/sessions/:id/workspace/file and diff should require a path query', async () => {
+    const workDir = await createWorkspaceApiGitRepo(tmpDir)
+    const { sessionId } = await service.createSession(workDir)
+
+    for (const route of ['file', 'diff']) {
+      const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/workspace/${route}`)
+      expect(res.status).toBe(400)
+      expect(await res.json()).toMatchObject({
+        error: 'BAD_REQUEST',
+      })
+    }
+  })
+
+  it('GET /api/sessions/:id/workspace/file and tree should reject traversal with 403', async () => {
+    const workDir = await createWorkspaceApiGitRepo(tmpDir)
+    const { sessionId } = await service.createSession(workDir)
+
+    for (const route of ['file', 'tree']) {
+      const res = await fetch(
+        `${baseUrl}/api/sessions/${sessionId}/workspace/${route}?path=${encodeURIComponent('../outside.txt')}`,
+      )
+      expect(res.status).toBe(403)
+      expect(await res.json()).toMatchObject({
+        error: 'FORBIDDEN',
+      })
+    }
+  })
+
+  it('GET /api/sessions/:id/workspace/diff should reject traversal with 403', async () => {
+    const workDir = await createWorkspaceApiGitRepo(tmpDir)
+    const { sessionId } = await service.createSession(workDir)
+
+    const res = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/workspace/diff?path=${encodeURIComponent('../outside.txt')}`,
+    )
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({
+      error: 'FORBIDDEN',
+    })
+  })
+
+  it('GET /api/sessions/:id/workspace/status should 404 for unknown sessions', async () => {
+    const res = await fetch(
+      `${baseUrl}/api/sessions/00000000-0000-0000-0000-000000000000/workspace/status`,
+    )
+    expect(res.status).toBe(404)
+    expect(await res.json()).toMatchObject({
+      error: 'NOT_FOUND',
+    })
+  })
+
+  it('non-GET workspace routes should return 405', async () => {
+    const workDir = await createWorkspaceApiGitRepo(tmpDir)
+    const { sessionId } = await service.createSession(workDir)
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/workspace/status`, {
+      method: 'POST',
+    })
+
+    expect(res.status).toBe(405)
+    expect(await res.json()).toMatchObject({
+      error: 'METHOD_NOT_ALLOWED',
+    })
+  })
+
   it('POST /api/sessions/:id/rewind should preview and trim the active conversation chain', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     const firstUserId = crypto.randomUUID()
@@ -1188,6 +1537,65 @@ describe('Sessions API', () => {
     expect(remainingMessages).toHaveLength(0)
   })
 
+  it('POST /api/sessions/:id/rewind should resolve checkpoint paths from the target prompt cwd', async () => {
+    const sessionId = 'bbbbbbbb-bbbb-cccc-dddd-ffffffffffff'
+    const parentDir = path.join(tmpDir, 'nested-cwd-parent')
+    const workDir = path.join(parentDir, 'testbb')
+    const targetFile = path.join(workDir, 'vite.config.js')
+    const userId = crypto.randomUUID()
+    const assistantId = crypto.randomUUID()
+    const laterUserId = crypto.randomUUID()
+    const backupName = 'nested-cwd@v1'
+
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.writeFile(targetFile, "export default 'after'\n", 'utf-8')
+    await writeFileHistoryBackup(sessionId, backupName, "export default 'before'\n")
+
+    await writeSessionFile(sanitizePath(parentDir), sessionId, [
+      makeFileHistorySnapshotEntry(userId, {
+        'testbb/vite.config.js': {
+          backupFileName: backupName,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('create a nested project', userId),
+        cwd: parentDir,
+        sessionId,
+      },
+      {
+        ...makeAssistantEntry('DONE', userId),
+        uuid: assistantId,
+      },
+      {
+        ...makeUserEntry('latest tool result after cd', laterUserId),
+        cwd: workDir,
+        sessionId,
+      },
+    ])
+
+    const previewRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userMessageIndex: 0, dryRun: true }),
+    })
+    expect(previewRes.status).toBe(200)
+    const preview = await previewRes.json() as {
+      code: { available: boolean; filesChanged: string[] }
+    }
+    expect(preview.code.available).toBe(true)
+    expect(preview.code.filesChanged).toEqual([targetFile])
+
+    const executeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userMessageIndex: 0 }),
+    })
+    expect(executeRes.status).toBe(200)
+    expect(await fs.readFile(targetFile, 'utf-8')).toBe("export default 'before'\n")
+  })
+
   it('POST /api/sessions/:id/rewind should restore multiple files and remove created files', async () => {
     const sessionId = 'cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee'
     const workDir = path.join(tmpDir, 'multi-file-fixture')
@@ -1316,6 +1724,163 @@ describe('Sessions API', () => {
     const remainingMessages = await service.getSessionMessages(sessionId)
     expect(remainingMessages.map((message) => message.id)).toHaveLength(2)
     expect(remainingMessages[0]?.id).toBe(firstUserId)
+  })
+
+  it('POST /api/sessions/:id/rewind should keep first-turn file state when undoing only the latest turn', async () => {
+    const sessionId = 'dddddddd-bbbb-cccc-dddd-ffffffffffff'
+    const workDir = path.join(tmpDir, 'two-turns-separate-files')
+    const firstTurnFile = path.join(workDir, 'src', 'first.js')
+    const secondTurnFile = path.join(workDir, 'src', 'second.js')
+    const firstUserId = crypto.randomUUID()
+    const secondUserId = crypto.randomUUID()
+    const firstBaseBackup = 'separate-first@v1'
+    const firstAfterTurnBackup = 'separate-first@v2'
+    const secondBaseBackup = 'separate-second@v1'
+
+    await fs.mkdir(path.dirname(firstTurnFile), { recursive: true })
+    await fs.writeFile(firstTurnFile, "export const FIRST = 'v1'\n", 'utf-8')
+    await fs.writeFile(secondTurnFile, "export const SECOND = 'v2'\n", 'utf-8')
+    await writeFileHistoryBackup(sessionId, firstBaseBackup, "export const FIRST = 'base'\n")
+    await writeFileHistoryBackup(sessionId, firstAfterTurnBackup, "export const FIRST = 'v1'\n")
+    await writeFileHistoryBackup(sessionId, secondBaseBackup, "export const SECOND = 'base'\n")
+
+    await writeSessionFile('-tmp-api-two-turns-separate-files', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(firstUserId, {
+        'src/first.js': {
+          backupFileName: firstBaseBackup,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('make first file v1', firstUserId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantEntry('DONE first', firstUserId),
+      makeFileHistorySnapshotEntry(secondUserId, {
+        'src/first.js': {
+          backupFileName: firstAfterTurnBackup,
+          version: 2,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+        'src/second.js': {
+          backupFileName: secondBaseBackup,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('make second file v2', secondUserId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantEntry('DONE second', secondUserId),
+    ])
+
+    const previewRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userMessageIndex: 1, dryRun: true }),
+    })
+    expect(previewRes.status).toBe(200)
+    const preview = await previewRes.json() as {
+      code: { available: boolean; filesChanged: string[] }
+    }
+    expect(preview.code.available).toBe(true)
+    expect(preview.code.filesChanged).toEqual([secondTurnFile])
+
+    const executeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userMessageIndex: 1 }),
+    })
+    expect(executeRes.status).toBe(200)
+
+    expect(await fs.readFile(firstTurnFile, 'utf-8')).toBe("export const FIRST = 'v1'\n")
+    expect(await fs.readFile(secondTurnFile, 'utf-8')).toBe("export const SECOND = 'base'\n")
+
+    const remainingMessages = await service.getSessionMessages(sessionId)
+    expect(remainingMessages).toHaveLength(2)
+    expect(remainingMessages[0]?.id).toBe(firstUserId)
+  })
+
+  it('POST /api/sessions/:id/rewind should include files created after the first turn', async () => {
+    const sessionId = 'eeeeeeee-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const workDir = path.join(tmpDir, 'created-on-second-turn')
+    const firstFile = path.join(workDir, 'src', 'step.js')
+    const createdFile = path.join(workDir, 'notes', 'generated.txt')
+    const firstUserId = crypto.randomUUID()
+    const secondUserId = crypto.randomUUID()
+    const backupV1 = 'second-created-step@v1'
+    const backupV2 = 'second-created-step@v2'
+
+    await fs.mkdir(path.dirname(firstFile), { recursive: true })
+    await fs.mkdir(path.dirname(createdFile), { recursive: true })
+    await fs.writeFile(firstFile, "export const STEP = 'v2'\n", 'utf-8')
+    await fs.writeFile(createdFile, 'generated\n', 'utf-8')
+    await writeFileHistoryBackup(sessionId, backupV1, "export const STEP = 'base'\n")
+    await writeFileHistoryBackup(sessionId, backupV2, "export const STEP = 'v1'\n")
+
+    await writeSessionFile('-tmp-api-second-turn-created', sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeFileHistorySnapshotEntry(firstUserId, {
+        'src/step.js': {
+          backupFileName: backupV1,
+          version: 1,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('make v1', firstUserId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantEntry('DONE', firstUserId),
+      makeFileHistorySnapshotEntry(secondUserId, {
+        'src/step.js': {
+          backupFileName: backupV2,
+          version: 2,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+        'notes/generated.txt': {
+          backupFileName: null,
+          version: 2,
+          backupTime: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      {
+        ...makeUserEntry('make v2 and create file', secondUserId),
+        cwd: workDir,
+        sessionId,
+      },
+      makeAssistantEntry('DONE', secondUserId),
+    ])
+
+    const previewRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userMessageIndex: 1, dryRun: true }),
+    })
+    expect(previewRes.status).toBe(200)
+    const preview = await previewRes.json() as {
+      code: { available: boolean; filesChanged: string[]; insertions: number }
+    }
+    expect(preview.code.filesChanged.sort()).toEqual([
+      createdFile,
+      firstFile,
+    ].sort())
+    expect(preview.code.insertions).toBe(2)
+
+    const executeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userMessageIndex: 1 }),
+    })
+    expect(executeRes.status).toBe(200)
+    expect(await fs.readFile(firstFile, 'utf-8')).toBe("export const STEP = 'v1'\n")
+    await expect(fs.stat(createdFile)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   // --------------------------------------------------------------------------

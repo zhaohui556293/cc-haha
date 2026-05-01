@@ -38,6 +38,7 @@ desktop/brand-assets/
 
 # Superpowers plans & specs (local only)
 docs/superpowers/
+.superpowers/
 
 # Temp server/web logs
 .tmp-*.log
