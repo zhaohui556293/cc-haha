@@ -66,3 +66,6 @@ runtime/__pycache__
 
 # IDE
 .idea
+
+# Codex logs
+.codex-logs/
