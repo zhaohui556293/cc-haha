@@ -10,7 +10,7 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import { fileURLToPath } from 'node:url'
-import { ConversationService, conversationService } from '../services/conversationService.js'
+import { ConversationService, ConversationStartupError, conversationService } from '../services/conversationService.js'
 import { SessionService } from '../services/sessionService.js'
 import { ProviderService } from '../services/providerService.js'
 
@@ -28,6 +28,21 @@ describe('ConversationService', () => {
   it('should track active sessions as empty initially', () => {
     const svc = new ConversationService()
     expect(svc.getActiveSessions()).toEqual([])
+  })
+
+  it('should block startup after a session is deleted during prewarm', async () => {
+    const svc = new ConversationService()
+    const sid = crypto.randomUUID()
+
+    svc.markSessionDeleted(sid)
+
+    try {
+      await svc.startSession(sid, process.cwd(), 'ws://127.0.0.1:1/sdk/test')
+      throw new Error('expected startSession to reject')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConversationStartupError)
+      expect((error as ConversationStartupError).code).toBe('SESSION_DELETED')
+    }
   })
 
   it('should return false when sending message to non-existent session', async () => {

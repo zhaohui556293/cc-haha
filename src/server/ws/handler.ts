@@ -278,7 +278,12 @@ async function handleUserMessage(
   // Track user message for title generation
   let titleState = sessionTitleState.get(sessionId)
   if (!titleState) {
-    titleState = { userMessageCount: 0, hasCustomTitle: false, firstUserMessage: '', allUserMessages: [] }
+    titleState = {
+      userMessageCount: 0,
+      hasCustomTitle: !!(await sessionService.getCustomTitle(sessionId)),
+      firstUserMessage: '',
+      allUserMessages: [],
+    }
     sessionTitleState.set(sessionId, titleState)
   }
   titleState.userMessageCount++
@@ -606,7 +611,11 @@ function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: s
       if (count === 1) {
         const placeholder = deriveTitle(text)
         if (placeholder) {
-          await saveAiTitle(sessionId, placeholder)
+          const saved = await saveAiTitle(sessionId, placeholder)
+          if (!saved) {
+            state.hasCustomTitle = true
+            return
+          }
           sendMessage(ws, { type: 'session_title_updated', sessionId, title: placeholder })
         }
       }
@@ -614,7 +623,11 @@ function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: s
       // Stage 2: AI-generated title
       const aiTitle = await generateTitle(text, runtimeProviderId)
       if (aiTitle) {
-        await saveAiTitle(sessionId, aiTitle)
+        const saved = await saveAiTitle(sessionId, aiTitle)
+        if (!saved) {
+          state.hasCustomTitle = true
+          return
+        }
         sendMessage(ws, { type: 'session_title_updated', sessionId, title: aiTitle })
       }
     } catch (err) {

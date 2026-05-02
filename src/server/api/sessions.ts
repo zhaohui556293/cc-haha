@@ -308,6 +308,7 @@ function isSessionNotFoundError(error: unknown): error is Error {
 }
 
 async function deleteSession(sessionId: string): Promise<Response> {
+  conversationService.markSessionDeleted(sessionId)
   await sessionService.deleteSession(sessionId)
   return Response.json({ ok: true })
 }

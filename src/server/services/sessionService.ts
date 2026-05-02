@@ -991,13 +991,27 @@ export class SessionService {
     offset?: number
   }): Promise<{ sessions: SessionListItem[]; total: number }> {
     const sessionFiles = await this.discoverSessionFiles(options?.project)
+    const filesWithStats = (await Promise.all(sessionFiles.map(async (sessionFile) => {
+      try {
+        return {
+          ...sessionFile,
+          stat: await fs.stat(sessionFile.filePath),
+        }
+      } catch {
+        return null
+      }
+    }))).filter((item): item is NonNullable<typeof item> => item !== null)
+
+    filesWithStats.sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime())
+
+    const total = filesWithStats.length
+    const offset = options?.offset ?? 0
+    const limit = options?.limit ?? 50
+    const paginatedFiles = filesWithStats.slice(offset, offset + limit)
 
     // Build session list items with metadata from file stats & first entries
-    const items: SessionListItem[] = []
-
-    for (const { filePath, projectDir, sessionId } of sessionFiles) {
+    const items = (await Promise.all(paginatedFiles.map(async ({ filePath, projectDir, sessionId, stat }) => {
       try {
-        const stat = await fs.stat(filePath)
         const entries = await this.readJsonlFile(filePath)
         const workDir = this.resolveWorkDirFromEntries(entries, projectDir)
         const workDirExists = await this.pathExists(workDir)
@@ -1018,7 +1032,7 @@ export class SessionService {
           }
         }
 
-        items.push({
+        return {
           id: sessionId,
           title,
           createdAt,
@@ -1027,21 +1041,14 @@ export class SessionService {
           projectPath: projectDir,
           workDir,
           workDirExists,
-        })
+        }
       } catch {
         // Skip unreadable files
+        return null
       }
-    }
+    }))).filter((item): item is SessionListItem => item !== null)
 
-    // Sort by modifiedAt descending (most recent first)
-    items.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
-
-    const total = items.length
-    const offset = options?.offset ?? 0
-    const limit = options?.limit ?? 50
-    const paginated = items.slice(offset, offset + limit)
-
-    return { sessions: paginated, total }
+    return { sessions: items, total }
   }
 
   /**
@@ -1210,6 +1217,20 @@ export class SessionService {
       aiTitle: title,
       timestamp: new Date().toISOString(),
     })
+  }
+
+  async getCustomTitle(sessionId: string): Promise<string | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+
+    const entries = await this.readJsonlFile(found.filePath)
+    let customTitle: string | null = null
+    for (const entry of entries) {
+      if (entry.type === 'custom-title' && typeof entry.customTitle === 'string' && entry.customTitle.trim()) {
+        customTitle = entry.customTitle
+      }
+    }
+    return customTitle
   }
 
   /**

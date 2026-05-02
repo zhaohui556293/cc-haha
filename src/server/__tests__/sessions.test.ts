@@ -374,6 +374,34 @@ describe('SessionService', () => {
     expect(page2.sessions).toHaveLength(1)
   })
 
+  it('should only parse the requested page when listing many sessions', async () => {
+    for (let i = 0; i < 12; i++) {
+      const id = `1000000${i.toString(16)}-bbbb-cccc-dddd-eeeeeeeeeeee`
+      const filePath = await writeSessionFile('-tmp-many-sessions', id, [
+        makeSnapshotEntry(),
+        makeUserEntry(`Message ${i}`),
+      ])
+      const mtime = new Date(Date.now() - i * 1000)
+      await fs.utimes(filePath, mtime, mtime)
+    }
+
+    const serviceWithSpy = service as unknown as {
+      readJsonlFile: (...args: unknown[]) => Promise<unknown>
+    }
+    const originalReadJsonlFile = serviceWithSpy.readJsonlFile.bind(service)
+    let readCount = 0
+    serviceWithSpy.readJsonlFile = async (...args) => {
+      readCount += 1
+      return originalReadJsonlFile(...args)
+    }
+
+    const result = await service.listSessions({ limit: 3, offset: 0 })
+
+    expect(result.total).toBe(12)
+    expect(result.sessions).toHaveLength(3)
+    expect(readCount).toBe(3)
+  })
+
   it('should filter sessions by project', async () => {
     const id1 = 'aaaaaaaa-1111-cccc-dddd-eeeeeeeeeeee'
     const id2 = 'aaaaaaaa-2222-cccc-dddd-eeeeeeeeeeee'

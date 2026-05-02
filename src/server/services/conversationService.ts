@@ -61,7 +61,8 @@ export class ConversationStartupError extends Error {
       | 'CLI_AUTH_REQUIRED'
       | 'CLI_SESSION_CONFLICT'
       | 'CLI_START_FAILED'
-      | 'CLI_SPAWN_FAILED',
+      | 'CLI_SPAWN_FAILED'
+      | 'SESSION_DELETED',
     readonly retryable = false,
   ) {
     super(message)
@@ -71,6 +72,7 @@ export class ConversationStartupError extends Error {
 
 export class ConversationService {
   private sessions = new Map<string, SessionProcess>()
+  private deletedSessions = new Set<string>()
   private providerService = new ProviderService()
 
   private buildSessionCliArgs(
@@ -106,12 +108,25 @@ export class ConversationService {
     sdkUrl: string,
     options?: SessionStartOptions,
   ): Promise<void> {
+    if (this.deletedSessions.has(sessionId)) {
+      throw new ConversationStartupError(
+        `Session was deleted before startup completed: ${sessionId}`,
+        'SESSION_DELETED',
+      )
+    }
     if (this.sessions.has(sessionId)) return
 
     const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
     const shouldResume = !!launchInfo && launchInfo.transcriptMessageCount > 0
     const shouldReplacePlaceholder =
       !!launchInfo && launchInfo.transcriptMessageCount === 0
+
+    if (this.deletedSessions.has(sessionId)) {
+      throw new ConversationStartupError(
+        `Session was deleted before startup completed: ${sessionId}`,
+        'SESSION_DELETED',
+      )
+    }
 
     if (shouldReplacePlaceholder) {
       await sessionService.deleteSessionFile(sessionId)
@@ -477,6 +492,11 @@ export class ConversationService {
       session.proc.kill()
       this.sessions.delete(sessionId)
     }
+  }
+
+  markSessionDeleted(sessionId: string): void {
+    this.deletedSessions.add(sessionId)
+    this.stopSession(sessionId)
   }
 
   getActiveSessions(): string[] {
