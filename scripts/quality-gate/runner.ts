@@ -7,6 +7,8 @@ import { lanesForMode } from './modes'
 import { writeReport } from './reporter'
 import type { LaneDefinition, LaneResult, QualityGateOptions, QualityGateReport } from './types'
 
+type LaneExecutor = (lane: LaneDefinition, options: QualityGateOptions) => Promise<LaneResult>
+
 function nowId() {
   return new Date().toISOString().replace(/[:.]/g, '-')
 }
@@ -140,6 +142,14 @@ function summarize(results: LaneResult[]) {
 }
 
 export async function runQualityGate(options: QualityGateOptions) {
+  return runQualityGateLanes(options, lanesForMode(options.mode, options.baselineTargets))
+}
+
+export async function runQualityGateLanes(
+  options: QualityGateOptions,
+  lanes: LaneDefinition[],
+  executeLane: LaneExecutor = runLane,
+) {
   const runId = options.runId ?? nowId()
   const startedAt = new Date().toISOString()
   const artifactsRoot = options.artifactsDir ?? join(options.rootDir, 'artifacts', 'quality-runs')
@@ -148,12 +158,9 @@ export async function runQualityGate(options: QualityGateOptions) {
 
   const runOptions = { ...options, runId, runOutputDir: outputDir }
   const results: LaneResult[] = []
-  for (const lane of lanesForMode(options.mode, options.baselineTargets)) {
-    const result = await runLane(lane, runOptions)
+  for (const lane of lanes) {
+    const result = await executeLane(lane, runOptions)
     results.push(result)
-    if (result.status === 'failed') {
-      break
-    }
   }
 
   const report: QualityGateReport = {

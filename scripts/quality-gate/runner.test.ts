@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { lanesForMode } from './modes'
 import { renderMarkdownReport } from './reporter'
-import { runQualityGate } from './runner'
-import type { QualityGateReport } from './types'
+import { runQualityGate, runQualityGateLanes } from './runner'
+import type { LaneDefinition, QualityGateReport } from './types'
 
 describe('quality gate modes', () => {
   test('pr mode includes existing path-aware PR checks', () => {
@@ -66,6 +66,56 @@ describe('runQualityGate', () => {
       expect(report.summary.skipped).toBeGreaterThan(0)
       expect(readFileSync(join(outputDir, 'report.json'), 'utf8')).toContain('"mode": "baseline"')
       expect(readFileSync(join(outputDir, 'report.md'), 'utf8')).toContain('# Quality Gate Report')
+    } finally {
+      rmSync(artifactsDir, { recursive: true, force: true })
+    }
+  })
+
+  test('continues through later lanes after a failure so reports show full impact', async () => {
+    const artifactsDir = mkdtempSync(join(tmpdir(), 'quality-gate-test-'))
+    const lanes: LaneDefinition[] = [
+      {
+        id: 'first-lane',
+        title: 'First lane',
+        description: 'Fails intentionally',
+        kind: 'command',
+        command: ['false'],
+        requiredForModes: ['pr'],
+      },
+      {
+        id: 'second-lane',
+        title: 'Second lane',
+        description: 'Still runs',
+        kind: 'command',
+        command: ['true'],
+        requiredForModes: ['pr'],
+      },
+    ]
+
+    try {
+      const { report } = await runQualityGateLanes({
+        mode: 'pr',
+        dryRun: false,
+        allowLive: false,
+        baselineTargets: [],
+        rootDir: process.cwd(),
+        artifactsDir,
+        runId: 'continue-after-failure-test',
+      }, lanes, async (lane) => ({
+        id: lane.id,
+        title: lane.title,
+        status: lane.id === 'first-lane' ? 'failed' : 'passed',
+        command: lane.command,
+        durationMs: 1,
+        exitCode: lane.id === 'first-lane' ? 1 : 0,
+      }))
+
+      expect(report.results.map((result) => result.id)).toEqual(['first-lane', 'second-lane'])
+      expect(report.summary).toEqual({
+        passed: 1,
+        failed: 1,
+        skipped: 0,
+      })
     } finally {
       rmSync(artifactsDir, { recursive: true, force: true })
     }
